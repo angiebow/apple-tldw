@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────────────────────────
+# tldw — .gitignore  (Swift/Xcode app + Python BERTopic backend)
+# ─────────────────────────────────────────────────────────────
+
+# ── macOS ──
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# ── Xcode / Swift ──
+# Build products
+build/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Per-user state (kept out of source control)
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Packages/
+Package.resolved
+
+# Misc Xcode
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.xcscmblueprint
+*.xccheckout
+
+# ── Python backend ──
+backend/venv/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Hugging Face / sentence-transformers / torch model caches
+# (downloaded at runtime, e.g. all-MiniLM-L6-v2 — never commit these)
+.cache/
+**/.cache/
+backend/models/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# Server logs / runtime artifacts
+*.log
+
+# ── Environment / secrets ──
+.env
+.env.*
+!.env.example

@@ -1,0 +1,33 @@
+{
+  "title": "Sample Podcast — multi-topic conversation",
+  "utterances": [
+    { "start": 0.0,   "end": 7.5,   "text": "Welcome back to the show. Today we are going deep on large language models and how transformers actually learn." },
+    { "start": 7.5,   "end": 15.2,  "text": "Right, so the attention mechanism is really the core idea. Every token attends to every other token in the sequence." },
+    { "start": 15.2,  "end": 23.0,  "text": "And that is what lets these neural networks capture long range context that older recurrent models struggled with." },
+    { "start": 23.0,  "end": 31.4,  "text": "Exactly. When you scale the model parameters and the training data together, you start seeing emergent reasoning abilities." },
+    { "start": 31.4,  "end": 39.0,  "text": "Fine tuning and reinforcement learning from human feedback then align the model to be helpful and follow instructions." },
+    { "start": 39.0,  "end": 46.8,  "text": "The embeddings these models produce are also incredibly useful for search, clustering, and retrieval augmented generation." },
+    { "start": 46.8,  "end": 54.0,  "text": "It is wild how a single architecture now powers chatbots, code assistants, and image captioning all at once." },
+
+    { "start": 54.0,  "end": 62.3,  "text": "Let's switch gears and talk about raising money. How did you actually approach your seed round?" },
+    { "start": 62.3,  "end": 70.1,  "text": "Honestly the hardest part was the pitch deck. Investors want to see traction, a clear market, and a credible founding team." },
+    { "start": 70.1,  "end": 78.9,  "text": "We talked to maybe forty venture capital firms before we found the right lead investor for the round." },
+    { "start": 78.9,  "end": 86.5,  "text": "Valuation negotiations were brutal. You have to balance dilution against the runway you need to hit the next milestone." },
+    { "start": 86.5,  "end": 94.2,  "text": "My advice to founders is to build relationships with investors months before you actually need the capital." },
+    { "start": 94.2,  "end": 102.0, "text": "And once the term sheet is signed, the real work of scaling the startup and hiring a team begins." },
+
+    { "start": 102.0, "end": 110.4, "text": "On a completely different note, I have been obsessed with optimizing my sleep lately." },
+    { "start": 110.4, "end": 118.0, "text": "Sleep is the foundation of health. Without deep sleep your body cannot recover or consolidate memory properly." },
+    { "start": 118.0, "end": 126.3, "text": "I started tracking my heart rate and my REM cycles with a wearable, and the data really changed my habits." },
+    { "start": 126.3, "end": 134.1, "text": "Cutting caffeine after noon and keeping the bedroom cool made a huge difference to my recovery scores." },
+    { "start": 134.1, "end": 142.0, "text": "Regular exercise during the day helps too, but training too late at night spikes your cortisol and wrecks your sleep." },
+    { "start": 142.0, "end": 150.2, "text": "Nutrition matters as well. A heavy meal right before bed and your resting heart rate stays elevated all night." },
+
+    { "start": 150.2, "end": 158.6, "text": "Before we wrap, I have to ask about the recent rocket launch. Space exploration is having a real moment." },
+    { "start": 158.6, "end": 166.9, "text": "Reusable rockets completely changed the economics. Landing the booster and reflying it slashes the cost per kilogram to orbit." },
+    { "start": 166.9, "end": 175.0, "text": "NASA and private companies are now planning missions to the Moon and eventually a crewed trip to Mars." },
+    { "start": 175.0, "end": 183.3, "text": "The satellites going up create a low earth orbit constellation that can deliver internet to the entire planet." },
+    { "start": 183.3, "end": 191.5, "text": "It is an incredible time for astronomy and planetary science. The next decade of space travel is going to be historic." },
+    { "start": 191.5, "end": 198.0, "text": "Couldn't agree more. That's all for today, thanks for listening and we'll see you next week." }
+  ]
+}

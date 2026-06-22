@@ -1,0 +1,7 @@
+# tldw Phase 1 — Topic Segmentation backend
+# Pinned loosely; these are the heavy ML deps for BERTopic.
+bertopic>=0.16,<0.17
+sentence-transformers>=2.7
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# bertopic pulls in umap-learn, hdbscan, scikit-learn, numpy, pandas, plotly
