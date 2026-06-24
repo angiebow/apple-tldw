@@ -59,7 +59,21 @@ backend/models/
 *.safetensors
 *.bin
 *.pt
+*.pth
 *.ckpt
+
+# ── ML datasets & trained model artifacts (too large for git) ──
+# Trained checkpoints / fine-tuned models (regenerable via the training notebooks)
+models/
+**/models/
+# Raw + processed datasets (download/regenerate locally)
+*.csv
+*.parquet
+*.tsv
+*.arrow
+*.feather
+# HF tokenizer dumps shipped alongside checkpoints (large, regenerable)
+**/tokenizer.json
 
 # Server logs / runtime artifacts
 *.log

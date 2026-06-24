@@ -1,13 +1,13 @@
 //
-//  SegmentationService.swift
-//  tldw — Phase 1: Topic Segmentation
+//  SummarizationService.swift
+//  tldw — Overall Summary (BART)
 //
-//  Thin HTTP client for the local FastAPI BERTopic sidecar.
+//  Thin HTTP client for the local FastAPI BART sidecar.
 //
 
 import Foundation
 
-enum SegmentationError: LocalizedError {
+enum SummarizationError: LocalizedError {
     case badStatus(Int, String)
     case transport(String)
 
@@ -21,7 +21,7 @@ enum SegmentationError: LocalizedError {
     }
 }
 
-struct SegmentationService {
+struct SummarizationService {
     var baseURL = URL(string: "http://127.0.0.1:8000")!
 
     /// Quick liveness probe for the status pill.
@@ -35,14 +35,20 @@ struct SegmentationService {
         return http.statusCode == 200
     }
 
-    /// Send the transcript to BERTopic and return contiguous topic segments.
-    func segment(_ utterances: [Utterance], minTopicSize: Int = 2) async throws -> SegmentResponse {
-        var request = URLRequest(url: baseURL.appendingPathComponent("segment"))
+    /// Send text to BART and return the summary. When `reference` is non-nil,
+    /// the response also carries ROUGE / BERTScore / METEOR `metrics`.
+    func summarize(
+        _ text: String,
+        maxLength: Int = 130,
+        minLength: Int = 30,
+        reference: String? = nil
+    ) async throws -> SummarizeResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("summarize"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 180  // first call downloads the embedding model
+        request.timeoutInterval = 300  // first call downloads ~1.6GB of weights
         request.httpBody = try JSONEncoder().encode(
-            SegmentRequest(utterances: utterances, minTopicSize: minTopicSize)
+            SummarizeRequest(text: text, maxLength: maxLength, minLength: minLength, reference: reference)
         )
 
         let data: Data
@@ -50,20 +56,20 @@ struct SegmentationService {
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
-            throw SegmentationError.transport(error.localizedDescription)
+            throw SummarizationError.transport(error.localizedDescription)
         }
 
         guard let http = response as? HTTPURLResponse else {
-            throw SegmentationError.transport("no HTTP response")
+            throw SummarizationError.transport("no HTTP response")
         }
         guard http.statusCode == 200 else {
-            throw SegmentationError.badStatus(http.statusCode, serverDetail(data))
+            throw SummarizationError.badStatus(http.statusCode, serverDetail(data))
         }
 
         do {
-            return try JSONDecoder().decode(SegmentResponse.self, from: data)
+            return try JSONDecoder().decode(SummarizeResponse.self, from: data)
         } catch {
-            throw SegmentationError.transport("could not decode response: \(error.localizedDescription)")
+            throw SummarizationError.transport("could not decode response: \(error.localizedDescription)")
         }
     }
 

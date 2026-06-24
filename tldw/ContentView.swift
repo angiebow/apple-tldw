@@ -1,28 +1,27 @@
 //
 //  ContentView.swift
-//  tldw — Phase 1: Topic Segmentation PoC
+//  tldw — Overall Summary (BART) PoC
 //
-//  Left pane: the raw timestamped transcript.
-//  Right pane: the contiguous topic segments BERTopic produced.
+//  Left pane: text input.  Right pane: the BART summary.
 //
 
 import SwiftUI
 
 struct ContentView: View {
-    @State private var model = SegmentationViewModel()
+    @State private var model = SummarizationViewModel()
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             HSplitView {
-                transcriptPane
-                    .frame(minWidth: 280)
-                segmentsPane
-                    .frame(minWidth: 360)
+                inputPane
+                    .frame(minWidth: 320)
+                summaryPane
+                    .frame(minWidth: 320)
             }
         }
-        .frame(minWidth: 760, minHeight: 480)
+        .frame(minWidth: 760, minHeight: 460)
         .task { await model.checkHealth() }
     }
 
@@ -31,9 +30,9 @@ struct ContentView: View {
     private var header: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("tldw — Topic Segmentation")
+                Text("tldw — Overall Summary")
                     .font(.headline)
-                Text(model.transcript.title)
+                Text("BART abstractive summarization")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -43,12 +42,19 @@ struct ContentView: View {
             serverPill
 
             Button {
-                Task { await model.runSegmentation() }
+                model.loadSample()
             } label: {
-                Label("Segment", systemImage: "wand.and.stars")
+                Label("Sample", systemImage: "doc.text")
+            }
+            .disabled(model.isLoading)
+
+            Button {
+                Task { await model.summarize() }
+            } label: {
+                Label("Summarize", systemImage: "sparkles")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(model.isLoading || model.transcript.utterances.isEmpty)
+            .disabled(model.isLoading || model.inputText.trimmingCharacters(in: .whitespacesAndNewlines).count < 40)
         }
         .padding()
     }
@@ -90,52 +96,118 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Transcript pane
+    // MARK: Input pane
 
-    private var transcriptPane: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            paneTitle("Transcript", subtitle: "\(model.transcript.utterances.count) utterances")
-            List(model.transcript.utterances) { utt in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("\(utt.start.asTimecode) – \(utt.end.asTimecode)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Text(utt.text)
-                        .font(.callout)
-                }
-                .padding(.vertical, 2)
+    private var inputPane: some View {
+        VSplitView {
+            VStack(alignment: .leading, spacing: 0) {
+                paneTitle("Input text", subtitle: "\(model.inputText.count) characters")
+                TextEditor(text: $model.inputText)
+                    .font(.callout)
+                    .padding(8)
+                    .scrollContentBackground(.hidden)
             }
-            .listStyle(.inset)
+
+            VStack(alignment: .leading, spacing: 0) {
+                paneTitle(
+                    "Reference summary",
+                    subtitle: "Optional — enables ROUGE / BERTScore / METEOR scoring"
+                )
+                TextEditor(text: $model.referenceText)
+                    .font(.callout)
+                    .padding(8)
+                    .scrollContentBackground(.hidden)
+            }
+            .frame(minHeight: 80, idealHeight: 120)
         }
     }
 
-    // MARK: Segments pane
+    // MARK: Summary pane
 
-    private var segmentsPane: some View {
+    private var summaryPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            paneTitle("Topic Segments", subtitle: model.statusMessage)
+            paneTitle("Summary", subtitle: model.stats.isEmpty ? model.statusMessage : model.stats)
 
             if model.isLoading {
                 Spacer()
-                ProgressView("Running BERTopic…")
+                ProgressView("Summarizing with BART…")
                     .frame(maxWidth: .infinity)
                 Spacer()
-            } else if model.segments.isEmpty {
+            } else if model.summary.isEmpty {
                 Spacer()
                 ContentUnavailableView(
-                    "No segments yet",
-                    systemImage: "square.stack.3d.up.slash",
-                    description: Text("Tap Segment to cluster the transcript into topics.")
+                    "No summary yet",
+                    systemImage: "sparkles",
+                    description: Text("Tap Summarize to condense the text with BART.")
                 )
                 Spacer()
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(model.segments) { segment in
-                            SegmentCard(segment: segment, color: model.color(for: segment))
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(model.summary)
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if let metrics = model.metrics {
+                            metricsCard(metrics)
                         }
                     }
                     .padding()
+                }
+            }
+        }
+    }
+
+    // MARK: Evaluation metrics
+
+    private func metricsCard(_ m: SummaryMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Evaluation vs. reference", systemImage: "checklist")
+                .font(.subheadline.bold())
+
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                metricRow("ROUGE", [
+                    ("R-1", m.rouge.rouge1),
+                    ("R-2", m.rouge.rouge2),
+                    ("R-L", m.rouge.rougeL),
+                ])
+                metricRow("BERTScore", [
+                    ("P", m.bertscore.precision),
+                    ("R", m.bertscore.recall),
+                    ("F1", m.bertscore.f1),
+                ])
+                metricRow("METEOR", [("", m.meteor)])
+            }
+
+            Text("Higher is better · 0–1 scale")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func metricRow(_ title: String, _ values: [(String, Double)]) -> some View {
+        GridRow {
+            Text(title)
+                .font(.caption.bold())
+                .gridColumnAlignment(.leading)
+            HStack(spacing: 8) {
+                ForEach(values, id: \.0) { sub in
+                    HStack(spacing: 4) {
+                        if !sub.0.isEmpty {
+                            Text(sub.0)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(String(format: "%.2f", sub.1))
+                            .font(.caption.monospacedDigit())
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.secondary.opacity(0.15), in: Capsule())
                 }
             }
         }
@@ -153,115 +225,6 @@ struct ContentView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
-    }
-}
-
-// MARK: - Segment card
-
-struct SegmentCard: View {
-    let segment: TopicSegment
-    let color: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(segment.label)
-                    .font(.headline)
-                    .foregroundStyle(segment.isOutlier ? .secondary : .primary)
-                Spacer()
-                Text("\(segment.start.asTimecode) – \(segment.end.asTimecode)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-
-            if !segment.keywords.isEmpty {
-                KeywordFlow(keywords: Array(segment.keywords.prefix(6)), color: color)
-            }
-
-            Text(segment.text)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-
-            HStack(spacing: 12) {
-                Label("\(Int(segment.duration.rounded()))s", systemImage: "clock")
-                Label("\(segment.utteranceCount) lines", systemImage: "text.alignleft")
-                if segment.isOutlier {
-                    Label("outlier", systemImage: "questionmark.circle")
-                } else {
-                    Label("topic \(segment.topicId)", systemImage: "number")
-                }
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-        }
-        .padding()
-        .background(color.opacity(segment.isOutlier ? 0.04 : 0.10), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(color)
-                .frame(width: 4)
-                .padding(.vertical, 6)
-        }
-    }
-}
-
-// MARK: - Simple wrapping chip layout
-
-struct KeywordFlow: View {
-    let keywords: [String]
-    let color: Color
-
-    var body: some View {
-        FlowLayout(spacing: 6) {
-            ForEach(keywords, id: \.self) { word in
-                Text(word)
-                    .font(.caption2)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(color.opacity(0.18), in: Capsule())
-            }
-        }
-    }
-}
-
-/// Minimal flow layout so keyword chips wrap onto multiple lines.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        for view in subviews {
-            let size = view.sizeThatFits(.unspecified)
-            if x + size.width > maxWidth, x > 0 {
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-        return CGSize(width: maxWidth == .infinity ? x : maxWidth, height: y + rowHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for view in subviews {
-            let size = view.sizeThatFits(.unspecified)
-            if x + size.width > bounds.maxX, x > bounds.minX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
     }
 }
 

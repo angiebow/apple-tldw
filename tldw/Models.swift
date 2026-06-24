@@ -1,87 +1,67 @@
 //
 //  Models.swift
-//  tldw — Phase 1: Topic Segmentation
+//  tldw — Overall Summary (BART)
 //
-//  Codable types shared with the Python BERTopic backend. JSON keys are
-//  snake_case on the wire; CodingKeys map them to Swift camelCase.
+//  Codable wire types shared with the Python summarization backend.
 //
 
 import Foundation
 
-/// One timestamped line of the transcript (the unit BERTopic clusters).
-struct Utterance: Codable, Identifiable, Hashable {
-    let start: Double
-    let end: Double
+/// Request body for `POST /summarize`.
+struct SummarizeRequest: Codable {
     let text: String
-
-    /// Start time is unique within a transcript, so it works as a stable id.
-    var id: Double { start }
-}
-
-/// The bundled sample transcript file (`sample_transcript.json`).
-struct Transcript: Codable {
-    let title: String
-    let utterances: [Utterance]
-}
-
-/// Request body for `POST /segment`.
-struct SegmentRequest: Codable {
-    let utterances: [Utterance]
-    let minTopicSize: Int
+    let maxLength: Int
+    let minLength: Int
+    /// Optional gold summary; when present the backend scores the generated
+    /// summary against it and returns `metrics`.
+    let reference: String?
 
     enum CodingKeys: String, CodingKey {
-        case utterances
-        case minTopicSize = "min_topic_size"
-    }
-}
-
-/// A contiguous block of the transcript that BERTopic assigned to one topic.
-struct TopicSegment: Codable, Identifiable, Hashable {
-    let topicId: Int
-    let label: String
-    let keywords: [String]
-    let start: Double
-    let end: Double
-    let utteranceCount: Int
-    let text: String
-    let isOutlier: Bool
-
-    var id: Double { start }
-    var duration: Double { end - start }
-
-    enum CodingKeys: String, CodingKey {
-        case topicId = "topic_id"
-        case label
-        case keywords
-        case start
-        case end
-        case utteranceCount = "utterance_count"
         case text
-        case isOutlier = "is_outlier"
+        case maxLength = "max_length"
+        case minLength = "min_length"
+        case reference
     }
 }
 
-/// Response body for `POST /segment`.
-struct SegmentResponse: Codable {
-    let segments: [TopicSegment]
-    let topicCount: Int
-    let outlierUtterances: Int
-    let embeddingModel: String
+/// Response body for `POST /summarize`.
+struct SummarizeResponse: Codable {
+    let summary: String
+    let model: String
+    let chunkCount: Int
+    let inputChars: Int
+    let summaryChars: Int
+    /// Present only when a `reference` was supplied with the request.
+    let metrics: SummaryMetrics?
 
     enum CodingKeys: String, CodingKey {
-        case segments
-        case topicCount = "topic_count"
-        case outlierUtterances = "outlier_utterances"
-        case embeddingModel = "embedding_model"
+        case summary
+        case model
+        case chunkCount = "chunk_count"
+        case inputChars = "input_chars"
+        case summaryChars = "summary_chars"
+        case metrics
     }
 }
 
-// MARK: - Helpers
+/// Summary-quality scores returned by `/evaluate` and by `/summarize` when a
+/// reference is provided. Each metric measures "closeness to the reference"
+/// differently: ROUGE (n-gram overlap), BERTScore (semantic), METEOR
+/// (alignment with stemming + synonymy).
+struct SummaryMetrics: Codable {
+    let rouge: RougeScores
+    let bertscore: BERTScores
+    let meteor: Double
+}
 
-extension Double {
-    /// Format a seconds value as `m:ss` for display.
-    var asTimecode: String {
-        let total = Int(rounded())
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
+struct RougeScores: Codable {
+    let rouge1: Double
+    let rouge2: Double
+    let rougeL: Double
+}
+
+struct BERTScores: Codable {
+    let precision: Double
+    let recall: Double
+    let f1: Double
 }

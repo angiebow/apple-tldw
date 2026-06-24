@@ -3,56 +3,54 @@
 Extract the most engaging highlights from long-form video (podcasts, talks) and
 turn them into shorts, using speech recognition + NLP.
 
-## Pipeline (5 phases)
+## Pipeline
 
 | # | Phase | Technique |
-|---|-------------------------|-----------------|
-| 1 | **Topic Segmentation**  | **BERTopic** ⟵ *implemented (PoC)* |
-| 2 | Extractive Ranking      | TextRank / LexRank |
-| 3 | Sentiment Overlay       | VADER |
-| 4 | Short Title Generation  | BART |
-| 5 | Voice Activity Detection| Silero-VAD |
+|---|----------------------------|-----------------------------------------------|
+| 1 | **Overall Summary**        | **BART** (`facebook/bart-large-cnn`) ⟵ *implemented (PoC)* |
+| 2 | Similarity                 | per-line embeddings → cosine (sentence) / BM25 (lexical) |
+| 3 | Clickbait / viral detection| distilbert / roberta fine-tuned on trending YouTube titles |
 
 ---
 
-## Phase 1 — Topic Segmentation (this PoC)
+## Phase 1 — Overall Summary (this PoC)
 
-A long transcript is split into timestamped utterances. **BERTopic** embeds and
-clusters them into topics; we then walk the utterances in time order and merge
-consecutive same-topic runs into **contiguous segments**. Those segments are the
-candidate boundaries every later phase builds on (rank them, score sentiment,
-title them, trim with VAD).
+The app takes raw text and returns an abstractive summary produced by **BART**.
+BART's encoder caps at ~1024 tokens, so longer inputs are split into token-aware
+chunks; each chunk is summarized and, when there are several, the chunk
+summaries are summarized once more into a single overall summary.
 
 ### Architecture
 
 ```
-┌──────────────────────┐   POST /segment (JSON)   ┌───────────────────────────┐
+┌──────────────────────┐   POST /summarize (JSON)  ┌───────────────────────────┐
 │  tldw  (SwiftUI app)  │ ───────────────────────▶ │  FastAPI sidecar (Python) │
-│  macOS, sandboxed     │ ◀─────────────────────── │  BERTopic + MiniLM        │
-└──────────────────────┘     topic segments        └───────────────────────────┘
-        127.0.0.1:8000
+│  macOS, sandboxed     │ ◀─────────────────────── │  BART summarization       │
+└──────────────────────┘        summary            └───────────────────────────┘
+        127.0.0.1:8000                               facebook/bart-large-cnn
 ```
 
-- **Why a sidecar?** BERTopic (sentence-transformers + UMAP + HDBSCAN) is
-  Python-only. The app talks to it over `localhost`. The same server is reused
-  by later phases.
+- **Why a sidecar?** BART runs via Hugging Face `transformers` (Python). The app
+  talks to it over `localhost`; the same server will host the Similarity and
+  clickbait phases next.
 - The macOS app is sandboxed; outgoing network is enabled via the
-  `ENABLE_OUTGOING_NETWORK_CONNECTIONS` build setting (no entitlements file).
+  `ENABLE_OUTGOING_NETWORK_CONNECTIONS` build setting.
+- On Apple Silicon the model runs on the **MPS** GPU backend when available.
 
 ### Repo layout
 
 ```
 backend/
-  server.py              FastAPI app: /health, /sample, /segment
-  sample_transcript.json canonical sample (4 topics: AI, fundraising, sleep, space)
-  requirements.txt       BERTopic stack
-  setup.sh / run.sh      create venv / start server
-tldw/                    SwiftUI app (filesystem-synchronized Xcode group)
-  Models.swift           Codable wire types
-  SegmentationService.swift   HTTP client
-  SegmentationViewModel.swift  @Observable state + sample loader
-  ContentView.swift      transcript pane + segment cards
-  sample_transcript.json bundled copy (shown in the UI before segmenting)
+  server.py          FastAPI app: /health, /summarize, /evaluate
+  evaluation.py      summary quality metrics: ROUGE, BERTScore, METEOR
+  requirements.txt   transformers, torch, fastapi, uvicorn (+ sentence-transformers for phase 2)
+  setup.sh / run.sh  create venv / start server
+tldw/                SwiftUI app (filesystem-synchronized Xcode group)
+  Models.swift               Codable wire types
+  SummarizationService.swift HTTP client
+  SummarizationViewModel.swift @Observable state
+  SampleText.swift           bundled sample passage
+  ContentView.swift          input pane + summary pane
 tldw.xcodeproj/
 ```
 
@@ -60,62 +58,79 @@ tldw.xcodeproj/
 
 ## Run it
 
-### 1. Start the backend (first time)
+### 1. Backend
 
 ```bash
 cd backend
-./setup.sh          # creates ./venv and installs the BERTopic stack (large)
+./setup.sh          # one-time: creates ./venv and installs the stack
 ./run.sh            # serves http://127.0.0.1:8000
 ```
 
-> The **first** `/segment` call downloads the `all-MiniLM-L6-v2` embedding model
-> (~80 MB) and takes ~30–60 s. Subsequent calls are fast.
+> The **first** `/summarize` call downloads `facebook/bart-large-cnn` (~1.6GB)
+> and is slow; subsequent calls are fast.
 
 Sanity-check without the app:
 
 ```bash
 curl -s localhost:8000/health
-curl -s localhost:8000/sample | python3 -m json.tool | head
-curl -s -X POST localhost:8000/segment \
+curl -s -X POST localhost:8000/summarize \
   -H 'Content-Type: application/json' \
-  --data @<(python3 -c 'import json;d=json.load(open("sample_transcript.json"));print(json.dumps({"utterances":d["utterances"]}))') \
-  | python3 -m json.tool
+  -d '{"text": "<paste a few paragraphs here>"}' | python3 -m json.tool
 ```
 
-### 2. Run the app
+### 2. App
 
-Open `tldw.xcodeproj` in Xcode and press **⌘R** (the CLI here only has Command
-Line Tools, so the app must be built from Xcode). The window loads the bundled
-sample; the status pill turns **green** when the backend is reachable. Tap
-**Segment** to cluster the transcript and see the colored topic segments.
+Open `tldw.xcodeproj` in Xcode and press **⌘R** (only Command Line Tools are
+installed on the CLI, so the app builds from Xcode). The window opens with a
+sample passage; when the status pill is **green** ("backend up"), tap
+**Summarize**.
+
+The input pane has a second, optional **Reference summary** field. Fill it in
+and the summary pane shows an **evaluation card** with ROUGE, BERTScore and
+METEOR scores for the generated summary against your reference.
 
 ---
 
 ## Data contract
 
-`POST /segment`
+`POST /summarize`
 
 ```jsonc
 // request
-{ "utterances": [ { "start": 0.0, "end": 7.5, "text": "…" } ],
-  "min_topic_size": 2 }
+{ "text": "…long text…", "max_length": 130, "min_length": 30 }
 
 // response
-{ "segments": [
-    { "topic_id": 0, "label": "models · attention · neural",
-      "keywords": ["models","attention","neural", "…"],
-      "start": 0.0, "end": 54.0, "utterance_count": 7,
-      "text": "…", "is_outlier": false } ],
-  "topic_count": 4, "outlier_utterances": 1,
-  "embedding_model": "all-MiniLM-L6-v2" }
+{ "summary": "…", "model": "facebook/bart-large-cnn",
+  "chunk_count": 1, "input_chars": 1820, "summary_chars": 320,
+  "metrics": null }
 ```
 
-## PoC notes / limitations
+Pass an optional `reference` (gold summary) to `/summarize` and the response's
+`metrics` field is populated with the scores below.
 
-- BERTopic's UMAP/HDBSCAN defaults assume thousands of docs; `server.py` scales
-  `n_neighbors`/`n_components`/`min_cluster_size` down so short podcast samples
-  cluster sensibly. Tune these for real, longer transcripts.
-- `random_state=42` on UMAP makes output reproducible (at the cost of single-
-  threaded embedding reduction).
-- Real input will come from Phase-0 speech recognition (e.g. Whisper) producing
-  the same `{start, end, text}` utterance shape.
+`POST /evaluate` — score a summary against a reference on its own:
+
+```jsonc
+// request
+{ "prediction": "…generated summary…", "reference": "…gold summary…" }
+
+// response
+{ "rouge":     { "rouge1": 0.57, "rouge2": 0.32, "rougeL": 0.57 },
+  "bertscore": { "precision": 0.87, "recall": 0.85, "f1": 0.86 },
+  "meteor":    0.74 }
+```
+
+- **ROUGE** — n-gram / longest-common-subsequence overlap (surface, recall-oriented).
+- **BERTScore** — contextual-embedding cosine similarity (semantic; credits paraphrase).
+- **METEOR** — unigram alignment with stemming + WordNet synonymy.
+
+> The first `/evaluate` call downloads the BERTScore RoBERTa model and NLTK
+> WordNet data, so it is slow once; subsequent calls are fast.
+
+## PoC notes
+
+- `max_length` / `min_length` are summary length bounds in tokens; tune per use.
+- Long transcripts are chunked at sentence boundaries to respect BART's 1024-token
+  limit, then hierarchically re-summarized.
+- Next phases reuse this sidecar: Similarity (cosine/BM25 over per-line embeddings)
+  and clickbait/viral scoring (fine-tuned distilbert/roberta).

@@ -1,7 +1,14 @@
-# tldw Phase 1 — Topic Segmentation backend
-# Pinned loosely; these are the heavy ML deps for BERTopic.
-bertopic>=0.16,<0.17
-sentence-transformers>=2.7
+# tldw — Overall Summary backend (BART)
+transformers>=4.40
+torch>=2.2
 fastapi>=0.110
 uvicorn[standard]>=0.29
-# bertopic pulls in umap-learn, hdbscan, scikit-learn, numpy, pandas, plotly
+# sentence-transformers is kept for the upcoming Similarity phase (cosine/BM25)
+sentence-transformers>=2.7
+# Summarization evaluation metrics: ROUGE, BERTScore, METEOR
+rouge-score>=0.1.2
+bert-score>=0.3.13
+nltk>=3.8
+# Pegasus tokenizer (google/pegasus-cnn_dailymail) in the eval scripts
+sentencepiece>=0.1.99
+protobuf>=3.20
