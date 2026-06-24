@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var showTranscript = false
     @State private var showSummary = false
+    @State private var selected: Set<Int> = []
     @AppStorage("isDarkMode") private var isDarkMode = false
 
     enum Category: String, CaseIterable {
@@ -156,7 +157,11 @@ struct ContentView: View {
                     spacing: 18
                 ) {
                     ForEach(Array(shownLines.enumerated()), id: \.element.id) { idx, line in
-                        ShortCard(rank: idx + 1, line: line, category: category)
+                        ShortCard(rank: idx + 1, line: line, category: category,
+                                  isSelected: Binding(
+                                    get: { selected.contains(line.id) },
+                                    set: { if $0 { selected.insert(line.id) } else { selected.remove(line.id) } }
+                                  ))
                     }
                 }
                 .padding(28)
@@ -265,6 +270,7 @@ private struct ShortCard: View {
     let rank: Int
     let line: LineScore
     let category: ContentView.Category
+    @Binding var isSelected: Bool
 
     /// Estimated spoken duration of the line at ~150 words/minute (2.5 w/s).
     /// Real durations come from the audio/timestamp step (out of scope here).
@@ -311,18 +317,14 @@ private struct ShortCard: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(line.text, forType: .string)
+                    isSelected.toggle()
                 } label: {
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(Color.blue))
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 24))
+                        .foregroundStyle(isSelected ? Color.blue : Color.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Copy line text")
+                .help(isSelected ? "Selected" : "Select this Short")
             }
         }
         .padding(22)
