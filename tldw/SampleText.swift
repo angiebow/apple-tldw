@@ -1,8 +1,8 @@
 //
 //  SampleText.swift
-//  tldw — Overall Summary (BART)
+//  tldw — Transcript Content Highlighter
 //
-//  A sample passage so the app is usable the moment it launches.
+//  A sample transcript so the app is usable the moment it launches.
 //
 
 enum SampleText {

@@ -161,7 +161,11 @@ poc-content-highlighter/        Steps 4–5 — virality detector + reranker
   processed/{train,val,test}.parquet       derived splits (git-ignored)
   models/                                   fine-tuned checkpoints (git-ignored)
 
-tldw/                           SwiftUI macOS app (summarization front-end)
+backend/                        FastAPI sidecar serving the highlighter pipeline
+  server.py                       /health + /highlight (all 5 steps)
+  setup.sh / run.sh               create venv / serve on 127.0.0.1:8000
+
+tldw/                           SwiftUI macOS app (highlighter front-end)
 tldw.xcodeproj/
 ```
 
@@ -180,32 +184,54 @@ available. Typical order:
 2. `poc-lines-relevancy/no2_poc_line_similarity.ipynb` — relevance ranking.
 3. `poc-content-highlighter/preprocess_youtube_trending.ipynb` — build the
    labeled splits, then `no3_compare_detectors.ipynb` and
-   `no4_compare_rerankers.ipynb` to train/compare the virality models.
+   `no4_compare_rerankers.ipynb` to train/compare the virality models, and
+   `train_reranker.py` to fine-tune + **save** the chosen bert-base reranker to
+   `models/bert-ranker/` (the detector is already saved under
+   `models/distilbert-detector/`).
 
 ---
 
-## macOS app (summarization front-end)
+## Highlighter app + backend
 
-The SwiftUI app in `tldw/` is a thin client for the summarization step. It talks
-to a local summarization service over `http://127.0.0.1:8000`
-(`/health`, `/summarize`) and shows the generated summary; an optional
-**Reference summary** field renders an evaluation card (ROUGE / BERTScore /
-METEOR) for the generated summary against your reference.
+The macOS app in `tldw/` is the **Transcript Content Highlighter** front-end:
+paste a transcript and get back two top-10 lists — most *relevant* lines and
+most *viral-worthy* lines. The models (Pegasus, all-mpnet, distilbert, bert) run
+in a local FastAPI sidecar (`backend/`); the app talks to it over
+`http://127.0.0.1:8000`.
 
-Open `tldw.xcodeproj` in Xcode and press **⌘R**. The window opens with a sample
-passage; when the status pill is **green** ("backend up"), tap **Summarize**.
+```bash
+# 1. ensure the reranker is trained/saved
+python poc-content-highlighter/train_reranker.py
 
-`POST /summarize` data contract:
+# 2. start the backend
+cd backend && ./setup.sh && ./run.sh    # serves 127.0.0.1:8000
+```
+
+Then open `tldw.xcodeproj` in Xcode and press **⌘R**. The window opens with a
+sample transcript; when the status pill is **green** ("backend up"), tap **Find
+Highlights**.
+
+`POST /highlight` data contract:
 
 ```jsonc
 // request
-{ "text": "…long text…", "max_length": 130, "min_length": 30, "reference": "…optional gold summary…" }
+{ "text": "…transcript…", "top_k": 10 }
 
 // response
-{ "summary": "…", "model": "…", "chunk_count": 1,
-  "input_chars": 1820, "summary_chars": 320,
-  "metrics": { "rouge": {…}, "bertscore": {…}, "meteor": 0.74 } }  // metrics null unless `reference` sent
+{ "summary": "…",
+  "models": { "summarizer": "…", "embedder": "…", "detector": "…", "reranker": "…" },
+  "line_count": 87,
+  "relevant": [ { "index": 12, "text": "…", "relevance": 0.71,
+                  "viral_score": 0.55, "viral_prob": 0.62, "viral_label": true }, … ],
+  "viral":    [ { …same shape, sorted by viral_score… }, … ] }
 ```
 
-> Long transcripts are chunked at sentence boundaries to respect the model's
-> input-token limit, then hierarchically re-summarized into one overall summary.
+The pipeline summarizes the transcript with Pegasus (chunking + hierarchical
+re-summarization for long inputs), embeds each line and the summary with the
+same encoder, ranks lines by cosine similarity (relevance), and scores each line
+with the distilbert detector (`viral_prob`/`viral_label`) and the bert reranker
+(`viral_score`).
+
+> The **first** `/highlight` call downloads Pegasus (~2.2GB) and all-mpnet
+> (~420MB) and is slow; subsequent calls are fast. On Apple Silicon the models
+> run on the **MPS** GPU backend when available.

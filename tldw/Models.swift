@@ -1,67 +1,67 @@
 //
 //  Models.swift
-//  tldw — Overall Summary (BART)
+//  tldw — Transcript Content Highlighter
 //
-//  Codable wire types shared with the Python summarization backend.
+//  Codable wire types shared with the Python highlighter backend.
 //
 
 import Foundation
 
-/// Request body for `POST /summarize`.
-struct SummarizeRequest: Codable {
+/// Request body for `POST /highlight`.
+struct HighlightRequest: Codable {
     let text: String
-    let maxLength: Int
-    let minLength: Int
-    /// Optional gold summary; when present the backend scores the generated
-    /// summary against it and returns `metrics`.
-    let reference: String?
+    let topK: Int
 
     enum CodingKeys: String, CodingKey {
         case text
-        case maxLength = "max_length"
-        case minLength = "min_length"
-        case reference
+        case topK = "top_k"
     }
 }
 
-/// Response body for `POST /summarize`.
-struct SummarizeResponse: Codable {
-    let summary: String
-    let model: String
-    let chunkCount: Int
-    let inputChars: Int
-    let summaryChars: Int
-    /// Present only when a `reference` was supplied with the request.
-    let metrics: SummaryMetrics?
+/// One transcript line with all of its pipeline scores. The same shape is used
+/// in both the "most relevant" and "most viral" lists.
+struct LineScore: Codable, Identifiable {
+    /// Index of the line within the parsed transcript (stable id for lists).
+    let index: Int
+    let text: String
+    /// Cosine similarity of the line to the transcript summary (relevance).
+    let relevance: Double
+    /// Reranker regression output — continuous virality (0–1-ish).
+    let viralScore: Double
+    /// Detector P(viral) and its binary verdict.
+    let viralProb: Double
+    let viralLabel: Bool
+
+    var id: Int { index }
 
     enum CodingKeys: String, CodingKey {
-        case summary
-        case model
-        case chunkCount = "chunk_count"
-        case inputChars = "input_chars"
-        case summaryChars = "summary_chars"
-        case metrics
+        case index, text, relevance
+        case viralScore = "viral_score"
+        case viralProb = "viral_prob"
+        case viralLabel = "viral_label"
     }
 }
 
-/// Summary-quality scores returned by `/evaluate` and by `/summarize` when a
-/// reference is provided. Each metric measures "closeness to the reference"
-/// differently: ROUGE (n-gram overlap), BERTScore (semantic), METEOR
-/// (alignment with stemming + synonymy).
-struct SummaryMetrics: Codable {
-    let rouge: RougeScores
-    let bertscore: BERTScores
-    let meteor: Double
+/// Which models produced the response (shown as provenance in the UI).
+struct ModelInfo: Codable {
+    let summarizer: String
+    let embedder: String
+    let detector: String
+    let reranker: String
 }
 
-struct RougeScores: Codable {
-    let rouge1: Double
-    let rouge2: Double
-    let rougeL: Double
-}
+/// Response body for `POST /highlight`.
+struct HighlightResponse: Codable {
+    let summary: String
+    let models: ModelInfo
+    let lineCount: Int
+    /// Top-K lines by relevance, and top-K by virality.
+    let relevant: [LineScore]
+    let viral: [LineScore]
 
-struct BERTScores: Codable {
-    let precision: Double
-    let recall: Double
-    let f1: Double
+    enum CodingKeys: String, CodingKey {
+        case summary, models
+        case lineCount = "line_count"
+        case relevant, viral
+    }
 }

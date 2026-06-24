@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+transformers
+torch
+accelerate
+sentence-transformers
+pydantic
+numpy
+scipy
+sentencepiece
+protobuf

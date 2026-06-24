@@ -1,13 +1,13 @@
 //
-//  SummarizationService.swift
-//  tldw — Overall Summary (BART)
+//  HighlightService.swift
+//  tldw — Transcript Content Highlighter
 //
-//  Thin HTTP client for the local FastAPI BART sidecar.
+//  Thin HTTP client for the local FastAPI highlighter sidecar.
 //
 
 import Foundation
 
-enum SummarizationError: LocalizedError {
+enum HighlightError: LocalizedError {
     case badStatus(Int, String)
     case transport(String)
 
@@ -21,7 +21,7 @@ enum SummarizationError: LocalizedError {
     }
 }
 
-struct SummarizationService {
+struct HighlightService {
     var baseURL = URL(string: "http://127.0.0.1:8000")!
 
     /// Quick liveness probe for the status pill.
@@ -35,41 +35,34 @@ struct SummarizationService {
         return http.statusCode == 200
     }
 
-    /// Send text to BART and return the summary. When `reference` is non-nil,
-    /// the response also carries ROUGE / BERTScore / METEOR `metrics`.
-    func summarize(
-        _ text: String,
-        maxLength: Int = 130,
-        minLength: Int = 30,
-        reference: String? = nil
-    ) async throws -> SummarizeResponse {
-        var request = URLRequest(url: baseURL.appendingPathComponent("summarize"))
+    /// Run the highlighter pipeline and return the two ranked lists.
+    func highlight(_ text: String, topK: Int = 10) async throws -> HighlightResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("highlight"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 300  // first call downloads ~1.6GB of weights
-        request.httpBody = try JSONEncoder().encode(
-            SummarizeRequest(text: text, maxLength: maxLength, minLength: minLength, reference: reference)
-        )
+        request.timeoutInterval = 600  // first call downloads Pegasus + mpnet weights
+
+        request.httpBody = try JSONEncoder().encode(HighlightRequest(text: text, topK: topK))
 
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
-            throw SummarizationError.transport(error.localizedDescription)
+            throw HighlightError.transport(error.localizedDescription)
         }
 
         guard let http = response as? HTTPURLResponse else {
-            throw SummarizationError.transport("no HTTP response")
+            throw HighlightError.transport("no HTTP response")
         }
         guard http.statusCode == 200 else {
-            throw SummarizationError.badStatus(http.statusCode, serverDetail(data))
+            throw HighlightError.badStatus(http.statusCode, serverDetail(data))
         }
 
         do {
-            return try JSONDecoder().decode(SummarizeResponse.self, from: data)
+            return try JSONDecoder().decode(HighlightResponse.self, from: data)
         } catch {
-            throw SummarizationError.transport("could not decode response: \(error.localizedDescription)")
+            throw HighlightError.transport("could not decode response: \(error.localizedDescription)")
         }
     }
 
