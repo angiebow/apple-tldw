@@ -533,87 +533,155 @@ private struct EditorView: View {
         .frame(maxWidth: .infinity, minHeight: 320)
     }
 
+    private let pxPerSec: CGFloat = 26
+    private func clipWidth(_ c: LineScore) -> CGFloat {
+        max(90, CGFloat(estimatedSeconds(c.text)) * pxPerSec)
+    }
+    private var contentWidth: CGFloat {
+        clips.reduce(0) { $0 + clipWidth($1) } + CGFloat(max(0, clips.count - 1)) * 2
+    }
+
     private var strip: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Arrange your Shorts")
-                .font(.callout.weight(.medium))
-                .padding(.horizontal, 24).padding(.top, 10)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(Array(clips.enumerated()), id: \.element.id) { i, clip in
-                        ClipThumb(
-                            order: i + 1,
-                            clip: clip,
-                            isCurrent: clip.id == (currentClip?.id ?? -1),
-                            canMoveLeft: i > 0,
-                            canMoveRight: i < clips.count - 1,
-                            onSelect: { previewID = clip.id },
-                            onRemove: { onRemove(clip.id) },
-                            onLeft: { onMove(i, i - 1) },
-                            onRight: { onMove(i, i + 2) }
-                        )
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Timeline").font(.callout.weight(.semibold)).foregroundStyle(.white)
+                Spacer()
+                selectedControls
+            }
+            .padding(.horizontal, 20).padding(.top, 12)
+
+            ScrollView(.horizontal, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 6) {
+                    TimelineRuler(width: contentWidth, totalSeconds: totalSeconds, pxPerSec: pxPerSec)
+                    HStack(spacing: 2) {
+                        ForEach(clips) { clip in
+                            TimelineClip(clip: clip,
+                                         width: clipWidth(clip),
+                                         isCurrent: clip.id == currentClip?.id,
+                                         onSelect: { previewID = clip.id },
+                                         onRemove: { onRemove(clip.id) })
+                        }
                     }
+                    WaveformTrack(width: contentWidth)
                 }
-                .padding(.horizontal, 24).padding(.bottom, 16)
+                .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
-        .background(.bar)
+        .background(Color(white: 0.12))
+    }
+
+    @ViewBuilder
+    private var selectedControls: some View {
+        if let c = currentClip, let i = clips.firstIndex(where: { $0.id == c.id }) {
+            HStack(spacing: 8) {
+                Button { onMove(i, i - 1) } label: { Image(systemName: "arrow.left") }
+                    .disabled(i == 0)
+                Button { onRemove(c.id) } label: { Image(systemName: "trash") }
+                Button { onMove(i, i + 2) } label: { Image(systemName: "arrow.right") }
+                    .disabled(i == clips.count - 1)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
     }
 }
 
-private struct ClipThumb: View {
-    let order: Int
+/// A single clip block on the timeline — width scales with its duration, with a
+/// filmstrip-style thumbnail band over a colored title bar.
+private struct TimelineClip: View {
     let clip: LineScore
+    let width: CGFloat
     let isCurrent: Bool
-    let canMoveLeft: Bool
-    let canMoveRight: Bool
     let onSelect: () -> Void
     let onRemove: () -> Void
-    let onLeft: () -> Void
-    let onRight: () -> Void
+
+    private var thumbCount: Int { max(1, Int(width / 26)) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("#\(order)")
-                    .font(.caption.monospacedDigit().weight(.bold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button { onRemove() } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .help("Remove from editor")
+        VStack(spacing: 0) {
+            // Filmstrip band.
+            HStack(spacing: 1) {
+                ForEach(0..<thumbCount, id: \.self) { _ in
+                    ZStack {
+                        Rectangle().fill(Color.gray.opacity(0.35))
+                        Image(systemName: "photo")
+                            .font(.system(size: 9)).foregroundStyle(.white.opacity(0.45))
+                    }
+                }
             }
+            .frame(height: 44)
+            .clipped()
 
-            // Thumbnail placeholder.
-            ZStack {
-                RoundedRectangle(cornerRadius: 8).fill(.quaternary)
-                Image(systemName: "play.fill").foregroundStyle(.secondary)
-            }
-            .frame(height: 64)
-
+            // Title bar (the orange clip label).
             Text(clip.text)
-                .font(.caption)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white)
                 .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .padding(.horizontal, 6).padding(.vertical, 4)
+                .background(Color.orange.opacity(0.92))
+        }
+        .frame(width: width, height: 92)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .stroke(isCurrent ? Color.white : Color.white.opacity(0.15),
+                    lineWidth: isCurrent ? 2 : 1))
+        .overlay(alignment: .topTrailing) {
+            Button { onRemove() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.white, .black.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .padding(3)
+            .help("Remove from timeline")
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+    }
+}
 
-            HStack {
-                Button { onLeft() } label: { Image(systemName: "arrow.left") }
-                    .buttonStyle(.plain).disabled(!canMoveLeft)
-                Label("\(estimatedSeconds(clip.text))s", systemImage: "clock")
-                    .font(.caption2).foregroundStyle(.secondary)
-                Spacer()
-                Button { onRight() } label: { Image(systemName: "arrow.right") }
-                    .buttonStyle(.plain).disabled(!canMoveRight)
+/// Time ruler with a tick label every 5 seconds.
+private struct TimelineRuler: View {
+    let width: CGFloat
+    let totalSeconds: Int
+    let pxPerSec: CGFloat
+
+    private func stamp(_ s: Int) -> String { String(format: "0:%02d", s) }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(Array(stride(from: 0, through: max(totalSeconds, 5), by: 5)), id: \.self) { s in
+                VStack(alignment: .leading, spacing: 2) {
+                    Rectangle().fill(.white.opacity(0.3)).frame(width: 1, height: 6)
+                    Text(stamp(s)).font(.system(size: 8)).foregroundStyle(.white.opacity(0.5))
+                }
+                .offset(x: CGFloat(s) * pxPerSec)
             }
         }
-        .padding(12)
-        .frame(width: 200)
-        .background(Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10)
-            .stroke(isCurrent ? Color.accentColor : Color.clear, lineWidth: 2))
-        .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onTapGesture { onSelect() }
+        .frame(width: max(width, CGFloat(totalSeconds) * pxPerSec), height: 18, alignment: .topLeading)
+    }
+}
+
+/// Decorative audio waveform track (no real audio yet).
+private struct WaveformTrack: View {
+    let width: CGFloat
+
+    private var barCount: Int { max(1, Int(width / 4)) }
+    private func barHeight(_ i: Int) -> CGFloat {
+        let h = (sin(Double(i) * 0.7) + sin(Double(i) * 0.23)) / 2  // -1...1-ish
+        return 5 + CGFloat((h + 1) / 2) * 26
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<barCount, id: \.self) { i in
+                Capsule().fill(Color.blue.opacity(0.75))
+                    .frame(width: 2, height: barHeight(i))
+            }
+        }
+        .frame(width: width, height: 40, alignment: .leading)
+        .padding(.horizontal, 4)
+        .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
     }
 }
 
