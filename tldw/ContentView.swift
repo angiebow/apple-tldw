@@ -18,6 +18,7 @@ struct ContentView: View {
     @State private var showTranscript = false
     @State private var showSummary = false
     @State private var selected: Set<Int> = []
+    @State private var detailLine: LineScore?
     @AppStorage("isDarkMode") private var isDarkMode = false
 
     enum Category: String, CaseIterable {
@@ -161,11 +162,15 @@ struct ContentView: View {
                                   isSelected: Binding(
                                     get: { selected.contains(line.id) },
                                     set: { if $0 { selected.insert(line.id) } else { selected.remove(line.id) } }
-                                  ))
+                                  ),
+                                  onOpen: { detailLine = line })
                     }
                 }
                 .padding(28)
             }
+        }
+        .sheet(item: $detailLine) { line in
+            ShortDetailView(line: line, category: category)
         }
     }
 
@@ -266,18 +271,21 @@ struct ContentView: View {
 
 // MARK: - Short card
 
+/// Estimated spoken duration of a line at ~150 words/minute (2.5 w/s).
+/// Real durations come from the audio/timestamp step (out of scope here).
+private func estimatedSeconds(_ text: String) -> Int {
+    let words = text.split(whereSeparator: { $0 == " " || $0 == "\n" }).count
+    return max(1, Int((Double(words) / 2.5).rounded()))
+}
+
 private struct ShortCard: View {
     let rank: Int
     let line: LineScore
     let category: ContentView.Category
     @Binding var isSelected: Bool
+    let onOpen: () -> Void
 
-    /// Estimated spoken duration of the line at ~150 words/minute (2.5 w/s).
-    /// Real durations come from the audio/timestamp step (out of scope here).
-    private var estSeconds: Int {
-        let words = line.text.split(whereSeparator: { $0 == " " || $0 == "\n" }).count
-        return max(1, Int((Double(words) / 2.5).rounded()))
-    }
+    private var estSeconds: Int { estimatedSeconds(line.text) }
 
     private var primaryScore: Double {
         category == .viral ? line.viralScore : line.relevance
@@ -333,6 +341,84 @@ private struct ShortCard: View {
                     in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(.quaternary, lineWidth: 1))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onTapGesture { onOpen() }
+        .help("Open full line")
+    }
+}
+
+// MARK: - Short detail (full line + video preview placeholder)
+
+private struct ShortDetailView: View {
+    let line: LineScore
+    let category: ContentView.Category
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            // Video clip preview — placeholder until the audio/cut step exists.
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6]))
+                    .foregroundStyle(.quaternary)
+                VStack(spacing: 8) {
+                    Image(systemName: "play.rectangle.fill")
+                        .font(.system(size: 46))
+                        .foregroundStyle(.secondary)
+                    Text("Video clip preview")
+                        .font(.headline).foregroundStyle(.secondary)
+                    Text("Generated once the audio extraction & cutting step is wired up")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding()
+            }
+            .frame(height: 220)
+
+            // Full line text.
+            ScrollView {
+                Text("“\(line.text)”")
+                    .font(.title3.weight(.semibold))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 180)
+
+            // Metadata.
+            HStack(spacing: 10) {
+                Label("\(estimatedSeconds(line.text)) seconds long", systemImage: "clock")
+                    .foregroundStyle(.secondary)
+                if line.viralLabel {
+                    Label("viral-worthy", systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+                scorePill("relevance", line.relevance)
+                scorePill("viral", line.viralScore)
+            }
+            .font(.callout)
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 560, height: 560)
+    }
+
+    private func scorePill(_ label: String, _ value: Double) -> some View {
+        HStack(spacing: 4) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(String(format: "%.2f", value)).font(.caption.monospacedDigit())
+        }
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(Color.secondary.opacity(0.15), in: Capsule())
     }
 }
 
