@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var category: Category = .viral
     @State private var showSearch = false
     @State private var searchText = ""
+    @AppStorage("isDarkMode") private var isDarkMode = false
 
     enum Category: String, CaseIterable {
         case viral = "Most viral"
@@ -35,7 +36,18 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 920, minHeight: 620)
+        .preferredColorScheme(isDarkMode ? .dark : .light)
         .task { await model.checkHealth() }
+    }
+
+    /// Top-right light/dark toggle. Shows the icon of the mode you'll switch to.
+    private var themeToggle: some View {
+        Button { withAnimation { isDarkMode.toggle() } } label: {
+            Image(systemName: isDarkMode ? "sun.max.fill" : "moon.fill")
+                .font(.title3)
+        }
+        .buttonStyle(.borderless)
+        .help(isDarkMode ? "Switch to light mode" : "Switch to dark mode")
     }
 
     // MARK: - Shared bits
@@ -93,7 +105,10 @@ struct ContentView: View {
                 titleBlock(emoji: "🩳", title: "Generate Shorts",
                            subtitle: "Paste a transcript, then find the most relevant and viral-worthy lines.")
                 Spacer()
-                serverPill
+                HStack(spacing: 10) {
+                    serverPill
+                    themeToggle
+                }
             }
 
             TextEditor(text: $model.transcriptText)
@@ -161,6 +176,7 @@ struct ContentView: View {
                     }
                     .buttonStyle(.borderless)
                     .help("Search lines")
+                    themeToggle
                 }
             }
 
