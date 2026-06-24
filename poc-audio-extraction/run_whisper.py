@@ -16,6 +16,7 @@ import sys
 import json
 import argparse
 import time
+from pathlib import Path
 import torch
 import torchaudio
 import whisper
@@ -220,8 +221,16 @@ def main():
     
     # 6. Save JSON Outputs
     print("\n[4/4] Saving output files…")
-    segments_path = os.path.join(args.output_dir, "transcript_segments.json")
-    words_path = os.path.join(args.output_dir, "transcript_words.json")
+    
+    # Dapatkan nama dasar dari file audio input untuk menghindari tabrakan nama file
+    audio_stem = Path(args.audio).stem
+    if audio_stem.endswith("_preprocessed"):
+        base_name = audio_stem[:-13]  # Potong akhiran "_preprocessed"
+    else:
+        base_name = audio_stem
+        
+    segments_path = os.path.join(args.output_dir, f"{base_name}_transcript_segments.json")
+    words_path = os.path.join(args.output_dir, f"{base_name}_transcript_words.json")
     
     with open(segments_path, "w", encoding="utf-8") as f:
         json.dump(global_segments, f, indent=2, ensure_ascii=False)

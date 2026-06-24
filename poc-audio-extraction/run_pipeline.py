@@ -160,7 +160,15 @@ def main():
     output_dir = ask_output_dir()
     print()
 
+    # Dapatkan nama file tanpa ekstensi dari video input
+    video_name = Path(input_path).stem
+
     config = build_config(output_dir)
+    # Atur nama output secara dinamis berdasarkan nama video input
+    config.preprocessed_filename = f"{video_name}_preprocessed.wav"
+    config.vad_metadata_filename = f"{video_name}_vad_metadata.json"
+    config.report_filename = f"{video_name}_processing_report.json"
+
     preprocessor = AudioPreprocessor(config)
 
     print()
