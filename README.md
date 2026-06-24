@@ -228,9 +228,13 @@ Highlights**.
 
 The pipeline summarizes the transcript with Pegasus (chunking + hierarchical
 re-summarization for long inputs), embeds each line and the summary with the
-same encoder, ranks lines by cosine similarity (relevance), and scores each line
-with the distilbert detector (`viral_prob`/`viral_label`) and the bert reranker
-(`viral_score`).
+same encoder, and produces two lists:
+
+- **`relevant`** — every line ranked by cosine similarity to the summary.
+- **`viral`** — a detector→reranker **cascade**: the distilbert detector first
+  gates out lines it classifies as non-viral (`viral_label == 0`), then the bert
+  reranker scores/orders only the survivors by `viral_score`. So this list may
+  hold fewer than `top_k` lines, and every line in it is detector-positive.
 
 > The **first** `/highlight` call downloads Pegasus (~2.2GB) and all-mpnet
 > (~420MB) and is slow; subsequent calls are fast. On Apple Silicon the models

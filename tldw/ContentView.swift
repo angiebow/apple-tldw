@@ -15,6 +15,8 @@ struct ContentView: View {
     @State private var category: Category = .viral
     @State private var showSearch = false
     @State private var searchText = ""
+    @State private var showTranscript = false
+    @State private var showSummary = false
     @AppStorage("isDarkMode") private var isDarkMode = false
 
     enum Category: String, CaseIterable {
@@ -180,10 +182,39 @@ struct ContentView: View {
                 }
             }
 
+            DisclosureGroup(isExpanded: $showTranscript) {
+                ScrollView {
+                    Text(model.transcriptText)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .frame(maxHeight: 200)
+                .background(Color(nsColor: .controlBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+                .padding(.top, 6)
+            } label: {
+                Label("Original transcript", systemImage: "text.alignleft")
+                    .font(.callout.weight(.medium))
+            }
+
             if !model.summary.isEmpty {
-                Text("Summary: \(model.summary)")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .lineLimit(2)
+                DisclosureGroup(isExpanded: $showSummary) {
+                    Text(model.summary)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(Color(nsColor: .controlBackgroundColor),
+                                    in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+                        .padding(.top, 6)
+                } label: {
+                    Label("Summary", systemImage: "text.append")
+                        .font(.callout.weight(.medium))
+                }
             }
 
             HStack(spacing: 12) {

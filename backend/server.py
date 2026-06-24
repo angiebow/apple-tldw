@@ -167,8 +167,12 @@ def highlight(req: HighlightRequest):
                 "viral_label": bool(viral_label[i])}
 
     k = max(1, min(req.top_k, len(lines)))
+    # Relevant list: all lines ranked by similarity to the summary.
     relevant = [row(i) for i in np.argsort(-relevance)[:k]]
-    viral = [row(i) for i in np.argsort(-viral_score)[:k]]
+    # Viral list: cascade — the detector first gates out non-viral lines, then
+    # the reranker scores/orders only the survivors.
+    viral_ranked = [i for i in np.argsort(-viral_score) if viral_label[i] == 1]
+    viral = [row(i) for i in viral_ranked[:k]]
 
     return {
         "summary": summary,
