@@ -16,7 +16,6 @@ Run:  ./setup.sh && ./run.sh
 from __future__ import annotations
 
 import base64
-import hashlib
 import io
 import os
 import re
@@ -30,7 +29,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from transformers import (AutoModelForSequenceClassification, AutoTokenizer,
-                          AutoModelForSeq2SeqLM)
+                          AutoModelForSeq2SeqLM, AutoProcessor,
+                          MusicgenForConditionalGeneration)
 
 # ── Config ────────────────────────────────────────────────────────────────
 DEVICE = ("cuda" if torch.cuda.is_available()
@@ -50,9 +50,12 @@ SUMM_MAX_INPUT  = 1024  # Pegasus encoder cap (max_position_embeddings)
 SCORE_MAX_LEN   = 64    # detector/reranker were trained at max_length=64
 MIN_LINE_WORDS  = 4     # drop trivially short lines
 
-SFX_SAMPLE_RATE = 32000                 # Stable Audio Open native rate
-SFX_MODEL_NAME  = "stub:procedural-v0"  # TODO: stabilityai/stable-audio-open-1.0
-SFX_MAX_SECONDS = 12.0                  # keep one-shot SFX short
+# Backsound: sentiment -> valence/arousal -> MusicGen prompt -> music bed.
+EMOTION_NAME      = "j-hartmann/emotion-english-distilroberta-base"
+MUSICGEN_NAME     = os.environ.get("TLDW_MUSICGEN", "facebook/musicgen-small")
+MUSIC_DEVICE      = os.environ.get("TLDW_MUSIC_DEVICE", DEVICE)  # set =cpu if MPS misbehaves
+MUSIC_MAX_SECONDS = 15.0
+MUSICGEN_TOK_RATE = 50                   # MusicGen emits ~50 audio tokens / second
 
 # ── Lazy-loaded model singletons ─────────────────────────────────────────
 _models = {}
@@ -166,39 +169,10 @@ def reranker_scores(lines: list[str], m) -> np.ndarray:
     return model(**enc).logits.squeeze(-1).cpu().numpy()
 
 
-# ── Sound effects (per selected clip) ──────────────────────────────────────
-# Rough keyword -> acoustic-mood map for the stub prompt builder. The real
-# version hands the line to an LLM (e.g. Claude Haiku) and asks for a short SFX
-# prompt + a hit time; this heuristic keeps the endpoint dependency-free for now.
-_SFX_CUES = [
-    (("scream", "horror", "fear", "terror", "hell", "pain", "nightmare"),
-     "tense low drone rising into a sharp metallic stinger"),
-    (("laugh", "funny", "joke", "lol", "hilarious"),
-     "light comedic pop with a quick rimshot"),
-    (("explode", "boom", "blast", "war", "fight", "destroy", "crash"),
-     "deep impact boom with a debris tail"),
-    (("money", "win", "reward", "success", "rich"),
-     "bright celebratory chime with a shimmer"),
-    (("run", "fast", "chase", "rush", "race"),
-     "fast whoosh sweeping past"),
-    (("sad", "cry", "alone", "lost", "die", "death", "grief"),
-     "somber hollow drone fading slowly"),
-]
-_DEFAULT_CUE = "subtle cinematic whoosh leading into a soft impact"
-
-
+# ── Audio helpers (shared by the backsound endpoint) ───────────────────────
 def _estimate_seconds(text: str) -> float:
     """Spoken duration at ~2.5 words/sec — matches the SwiftUI card estimate."""
     return max(1.0, round(len(text.split()) / 2.5))
-
-
-def _derive_sfx_prompt(text: str, viral_score: float | None) -> str:
-    """Turn a line into a short text-to-audio prompt. LLM seam: swap this body
-    for a Claude Haiku call that reads the line and emits {prompt, hit_time}."""
-    low = text.lower()
-    cue = next((p for keys, p in _SFX_CUES if any(k in low for k in keys)), _DEFAULT_CUE)
-    intensity = "punchy, loud, foreground" if (viral_score or 0) >= 0.5 else "subtle, background"
-    return f"{cue}; {intensity}"
 
 
 def _to_wav_bytes(signal: np.ndarray, sr: int) -> bytes:
@@ -213,32 +187,93 @@ def _to_wav_bytes(signal: np.ndarray, sr: int) -> bytes:
     return buf.getvalue()
 
 
-def _synthesize_placeholder(prompt: str, seconds: float, sr: int) -> np.ndarray:
-    """Deterministic procedural SFX (filtered noise + falling sweep under an
-    attack/decay envelope) so the audio path is testable without a model."""
-    seed = int.from_bytes(hashlib.sha256(prompt.encode()).digest()[:4], "big")
-    rng = np.random.default_rng(seed)
-    n = int(seconds * sr)
-    t = np.linspace(0, seconds, n, endpoint=False)
-    sweep = np.sin(2 * np.pi * (400 * np.exp(-3 * t)) * t)        # falling pitch
-    noise = rng.standard_normal(n)
-    env = np.exp(-3 * t) * (1 - np.exp(-40 * t))                  # fast attack, decay
-    sig = env * (0.6 * sweep + 0.4 * noise)
-    return sig / (np.max(np.abs(sig)) + 1e-9) * 0.9              # normalize
+# ── Backsound (sentiment -> MusicGen music bed) ────────────────────────────
+# Each emotion sits at a (valence, arousal) point in [-1, 1] — Russell's
+# circumplex. We take the softmax-weighted average, then translate that point
+# into musical adjectives/mode/tempo for the MusicGen prompt.
+_EMOTION_VA = {
+    "anger":    (-0.6,  0.8),
+    "disgust":  (-0.6,  0.4),
+    "fear":     (-0.7,  0.8),
+    "joy":      ( 0.8,  0.6),
+    "neutral":  ( 0.0,  0.0),
+    "sadness":  (-0.7, -0.4),
+    "surprise": ( 0.4,  0.7),
+}
+
+# Lazily loaded so the heavy MusicGen weights download only on first /backsound.
+_music = {}
 
 
-def _generate_sfx(prompt: str, seconds: float) -> bytes:
-    """SFX generation seam — returns WAV bytes.
+def _load_music():
+    if _music:
+        return _music
+    print(f"[tldw] loading emotion + MusicGen ({MUSICGEN_NAME}) on {MUSIC_DEVICE} …")
+    _music["emo_tok"] = AutoTokenizer.from_pretrained(EMOTION_NAME)
+    _music["emo"] = AutoModelForSequenceClassification.from_pretrained(EMOTION_NAME).to(MUSIC_DEVICE).eval()
+    _music["proc"] = AutoProcessor.from_pretrained(MUSICGEN_NAME)
+    _music["gen"] = MusicgenForConditionalGeneration.from_pretrained(MUSICGEN_NAME).to(MUSIC_DEVICE).eval()
+    print("[tldw] MusicGen ready")
+    return _music
 
-    Production path (TODO): load stabilityai/stable-audio-open-1.0 once in
-    _load_models(), then generate timed audio:
-        audio = pipe(prompt, audio_end_in_s=seconds).audios[0]  # [-1,1] float
-        return _to_wav_bytes(audio, SFX_SAMPLE_RATE)
-    For now we synthesize a procedural placeholder so the editor's full path
-    (request -> base64 WAV -> AVAudioPlayer) works end to end.
-    """
-    signal = _synthesize_placeholder(prompt, seconds, SFX_SAMPLE_RATE)
-    return _to_wav_bytes(signal, SFX_SAMPLE_RATE)
+
+@torch.no_grad()
+def _emotion_va(text: str, m) -> tuple[float, float, str, dict]:
+    """Classify emotion and reduce to a (valence, arousal) point."""
+    tok, model = m["emo_tok"], m["emo"]
+    enc = tok(text, return_tensors="pt", truncation=True, max_length=128).to(MUSIC_DEVICE)
+    probs = F.softmax(model(**enc).logits, dim=-1)[0].cpu().numpy()
+    id2label = model.config.id2label
+
+    val = aro = 0.0
+    scores = {}
+    for i, p in enumerate(probs):
+        label = id2label[i].lower()
+        v, a = _EMOTION_VA.get(label, (0.0, 0.0))
+        val += p * v
+        aro += p * a
+        scores[label] = round(float(p), 3)
+    dominant = id2label[int(probs.argmax())].lower()
+    return float(val), float(aro), dominant, scores
+
+
+def _va_to_music_prompt(valence: float, arousal: float) -> str:
+    """Map a (valence, arousal) point to a MusicGen text prompt."""
+    mode = ("major key" if valence >= 0.15
+            else "minor key" if valence <= -0.15 else "modal")
+    if arousal >= 0.5:
+        tempo = "energetic and driving, around 120 BPM"
+    elif arousal <= -0.1:
+        tempo = "slow and sparse, around 60 BPM, ambient"
+    else:
+        tempo = "moderate tempo, around 90 BPM"
+    # Quadrant adjectives (valence × arousal), with a neutral dead-zone center.
+    if abs(valence) < 0.15 and abs(arousal) < 0.2:
+        mood = "calm, neutral, understated"
+    elif valence >= 0 and arousal >= 0:
+        mood = "bright, uplifting, hopeful"
+    elif valence >= 0:
+        mood = "warm, gentle, peaceful"
+    elif arousal >= 0:
+        mood = "dark, tense, suspenseful, dissonant"
+    else:
+        mood = "somber, melancholic, hollow"
+    return (f"{mood} instrumental background music, {mode}, {tempo}, "
+            f"cinematic underscore, no vocals")
+
+
+def _generate_music(prompt: str, seconds: float, m) -> tuple[bytes, int]:
+    """Run MusicGen and return (WAV bytes, sample_rate)."""
+    proc, gen = m["proc"], m["gen"]
+    inputs = proc(text=[prompt], padding=True, return_tensors="pt").to(MUSIC_DEVICE)
+    sr = gen.config.audio_encoder.sampling_rate
+    max_new = int(seconds * MUSICGEN_TOK_RATE)
+    with torch.no_grad():
+        audio = gen.generate(**inputs, do_sample=True, guidance_scale=3.0,
+                             max_new_tokens=max_new)
+    wav = audio[0, 0].cpu().numpy().astype("float32")     # mono float [-1, 1]
+    wav = wav / (np.max(np.abs(wav)) + 1e-9) * 0.9        # normalize headroom
+    return _to_wav_bytes(wav, sr), sr
 
 
 # ── API ──────────────────────────────────────────────────────────────────
@@ -250,10 +285,9 @@ class HighlightRequest(BaseModel):
     top_k: int = 10
 
 
-class SFXRequest(BaseModel):
-    text: str
-    viral_score: Optional[float] = None   # from the ranked line; nudges intensity
-    duration_s: Optional[int] = None      # clip length; defaults to a spoken estimate
+class BacksoundRequest(BaseModel):
+    text: str                             # line (or whole-Short text) to read mood from
+    duration_s: Optional[int] = None      # bed length; defaults to a spoken estimate
 
 
 @app.get("/health")
@@ -304,22 +338,29 @@ def highlight(req: HighlightRequest):
     }
 
 
-@app.post("/sfx")
-def sfx(req: SFXRequest):
-    """Generate a sound effect for a single selected line (from the editor)."""
+@app.post("/backsound")
+def backsound(req: BacksoundRequest):
+    """Generate an emotion-matched background music bed for a clip (editor)."""
     text = req.text.strip()
     if len(text) < 4:
-        raise HTTPException(status_code=400, detail="Line too short to score a sound for.")
+        raise HTTPException(status_code=400, detail="Text too short to read a mood from.")
 
     seconds = float(req.duration_s) if req.duration_s else _estimate_seconds(text)
-    seconds = max(1.0, min(seconds, SFX_MAX_SECONDS))
-    prompt = _derive_sfx_prompt(text, req.viral_score)
-    wav = _generate_sfx(prompt, seconds)
+    seconds = max(2.0, min(seconds, MUSIC_MAX_SECONDS))
+
+    m = _load_music()
+    valence, arousal, emotion, scores = _emotion_va(text, m)
+    prompt = _va_to_music_prompt(valence, arousal)
+    wav, sr = _generate_music(prompt, seconds, m)
 
     return {
         "prompt": prompt,
+        "emotion": emotion,
+        "valence": round(valence, 3),
+        "arousal": round(arousal, 3),
+        "scores": scores,
         "audio_b64": base64.b64encode(wav).decode("ascii"),
-        "sample_rate": SFX_SAMPLE_RATE,
+        "sample_rate": sr,
         "duration_s": round(seconds, 2),
-        "model": SFX_MODEL_NAME,
+        "model": MUSICGEN_NAME,
     }

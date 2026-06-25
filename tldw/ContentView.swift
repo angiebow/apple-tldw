@@ -467,10 +467,10 @@ private struct EditorView: View {
 
     @State private var previewID: Int?
 
-    // Sound effects are generated per clip, on demand, for the selected clip only.
-    @State private var sfxByClip: [Int: SFXResponse] = [:]
-    @State private var generatingID: Int?
-    @State private var sfxError: String?
+    // Background music beds are generated per clip, on demand, for the selected clip.
+    @State private var bedByClip: [Int: BacksoundResponse] = [:]
+    @State private var bedGeneratingID: Int?
+    @State private var bedError: String?
     @State private var player: AVAudioPlayer?
     private let service = HighlightService()
 
@@ -478,29 +478,29 @@ private struct EditorView: View {
         clips.first { $0.id == previewID } ?? clips.first
     }
 
-    private func generateSFX(for clip: LineScore) {
-        generatingID = clip.id
-        sfxError = nil
-        Task {                       // View methods are @MainActor → safe to mutate state
-            defer { generatingID = nil }
+    private func generateBacksound(for clip: LineScore) {
+        bedGeneratingID = clip.id
+        bedError = nil
+        Task {
+            defer { bedGeneratingID = nil }
             do {
-                sfxByClip[clip.id] = try await service.generateSFX(for: clip)
+                bedByClip[clip.id] = try await service.generateBacksound(for: clip)
             } catch {
-                sfxError = error.localizedDescription
+                bedError = error.localizedDescription
             }
         }
     }
 
-    private func playSFX(_ sfx: SFXResponse) {
-        guard let data = Data(base64Encoded: sfx.audioB64) else {
-            sfxError = "Could not decode audio."
+    private func playAudio(b64: String, onError: (String) -> Void) {
+        guard let data = Data(base64Encoded: b64) else {
+            onError("Could not decode audio.")
             return
         }
         do {
             player = try AVAudioPlayer(data: data)
             player?.play()
         } catch {
-            sfxError = "Could not play audio: \(error.localizedDescription)"
+            onError("Could not play audio: \(error.localizedDescription)")
         }
     }
 
@@ -514,7 +514,7 @@ private struct EditorView: View {
             Divider()
             previewArea
                 .padding(24)
-            sfxBar
+            backsoundBar
             Spacer(minLength: 0)
             Divider()
             strip
@@ -568,43 +568,45 @@ private struct EditorView: View {
         .frame(maxWidth: .infinity, minHeight: 320)
     }
 
-    /// Sound-effect controls for the selected clip — generate, status, play.
+    /// Background-music controls for the selected clip — emotion-matched bed.
     @ViewBuilder
-    private var sfxBar: some View {
+    private var backsoundBar: some View {
         if let clip = currentClip {
-            let sfx = sfxByClip[clip.id]
+            let bed = bedByClip[clip.id]
             HStack(spacing: 12) {
-                Image(systemName: "waveform")
+                Image(systemName: "music.note")
                     .font(.title3)
-                    .foregroundStyle(sfx == nil ? .secondary : Color.blue)
+                    .foregroundStyle(bed == nil ? .secondary : Color.purple)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Sound effect").font(.callout.weight(.semibold))
-                    if let err = sfxError {
+                    Text("Background music").font(.callout.weight(.semibold))
+                    if let err = bedError {
                         Text(err).font(.caption).foregroundStyle(.red).lineLimit(1)
-                    } else if let sfx {
-                        Text("“\(sfx.prompt)”")
+                    } else if let bed {
+                        Text("\(bed.emotion) · V \(bed.valence, specifier: "%.2f") · A \(bed.arousal, specifier: "%.2f")")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     } else {
-                        Text("Generate a sound for the selected clip")
+                        Text("Generate an emotion-matched music bed")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
 
                 Spacer()
 
-                if generatingID == clip.id {
+                if bedGeneratingID == clip.id {
                     ProgressView().controlSize(.small)
                 } else {
-                    Button { generateSFX(for: clip) } label: {
-                        Label(sfx == nil ? "Generate SFX" : "Regenerate", systemImage: "sparkles")
+                    Button { generateBacksound(for: clip) } label: {
+                        Label(bed == nil ? "Generate music" : "Regenerate", systemImage: "wand.and.stars")
                     }
                     .buttonStyle(.bordered)
                 }
 
-                if let sfx {
-                    Button { playSFX(sfx) } label: { Label("Play", systemImage: "play.fill") }
-                        .buttonStyle(.borderedProminent)
+                if let bed {
+                    Button { playAudio(b64: bed.audioB64) { bedError = $0 } } label: {
+                        Label("Play", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 10)

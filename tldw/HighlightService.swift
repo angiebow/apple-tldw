@@ -66,15 +66,15 @@ struct HighlightService {
         }
     }
 
-    /// Generate a sound effect for a single selected line (editor page).
-    func generateSFX(for line: LineScore) async throws -> SFXResponse {
-        var request = URLRequest(url: baseURL.appendingPathComponent("sfx"))
+    /// Generate an emotion-matched background music bed for a clip (editor page).
+    func generateBacksound(for line: LineScore) async throws -> BacksoundResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("backsound"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 120  // first call may load the audio model
+        request.timeoutInterval = 600  // first call downloads MusicGen weights
 
         request.httpBody = try JSONEncoder().encode(
-            SFXRequest(text: line.text, viralScore: line.viralScore, durationS: nil))
+            BacksoundRequest(text: line.text, durationS: nil))
 
         let data: Data
         let response: URLResponse
@@ -92,9 +92,9 @@ struct HighlightService {
         }
 
         do {
-            return try JSONDecoder().decode(SFXResponse.self, from: data)
+            return try JSONDecoder().decode(BacksoundResponse.self, from: data)
         } catch {
-            throw HighlightError.transport("could not decode SFX response: \(error.localizedDescription)")
+            throw HighlightError.transport("could not decode backsound response: \(error.localizedDescription)")
         }
     }
 

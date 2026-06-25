@@ -42,31 +42,32 @@ struct LineScore: Codable, Identifiable {
     }
 }
 
-/// Request body for `POST /sfx` — generate a sound effect for one selected line.
-struct SFXRequest: Codable {
+/// Request body for `POST /backsound` — generate an emotion-matched music bed.
+struct BacksoundRequest: Codable {
     let text: String
-    let viralScore: Double?
     let durationS: Int?
 
     enum CodingKeys: String, CodingKey {
         case text
-        case viralScore = "viral_score"
         case durationS = "duration_s"
     }
 }
 
-/// Response body for `POST /sfx`. `audioB64` is a base64-encoded WAV clip.
-struct SFXResponse: Codable {
-    /// The text-to-audio prompt the backend derived from the line.
+/// Response body for `POST /backsound`. `audioB64` is a base64-encoded WAV bed.
+struct BacksoundResponse: Codable {
+    /// The MusicGen prompt derived from the detected mood.
     let prompt: String
+    /// Dominant emotion and its valence/arousal coordinates.
+    let emotion: String
+    let valence: Double
+    let arousal: Double
     let audioB64: String
     let sampleRate: Int
     let durationS: Double
-    /// Which audio model produced it (a stub until Stable Audio is wired up).
     let model: String
 
     enum CodingKeys: String, CodingKey {
-        case prompt, model
+        case prompt, emotion, valence, arousal, model
         case audioB64 = "audio_b64"
         case sampleRate = "sample_rate"
         case durationS = "duration_s"
