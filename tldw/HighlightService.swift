@@ -66,6 +66,38 @@ struct HighlightService {
         }
     }
 
+    /// Generate a sound effect for a single selected line (editor page).
+    func generateSFX(for line: LineScore) async throws -> SFXResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("sfx"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 120  // first call may load the audio model
+
+        request.httpBody = try JSONEncoder().encode(
+            SFXRequest(text: line.text, viralScore: line.viralScore, durationS: nil))
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw HighlightError.transport(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw HighlightError.transport("no HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            throw HighlightError.badStatus(http.statusCode, serverDetail(data))
+        }
+
+        do {
+            return try JSONDecoder().decode(SFXResponse.self, from: data)
+        } catch {
+            throw HighlightError.transport("could not decode SFX response: \(error.localizedDescription)")
+        }
+    }
+
     /// Pull the human-readable `detail` field out of a FastAPI error body.
     private func serverDetail(_ data: Data) -> String {
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

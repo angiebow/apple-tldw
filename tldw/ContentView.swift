@@ -9,6 +9,7 @@
 
 import SwiftUI
 import AppKit
+import AVFoundation
 
 struct ContentView: View {
     @State private var model = HighlightViewModel()
@@ -466,8 +467,41 @@ private struct EditorView: View {
 
     @State private var previewID: Int?
 
+    // Sound effects are generated per clip, on demand, for the selected clip only.
+    @State private var sfxByClip: [Int: SFXResponse] = [:]
+    @State private var generatingID: Int?
+    @State private var sfxError: String?
+    @State private var player: AVAudioPlayer?
+    private let service = HighlightService()
+
     private var currentClip: LineScore? {
         clips.first { $0.id == previewID } ?? clips.first
+    }
+
+    private func generateSFX(for clip: LineScore) {
+        generatingID = clip.id
+        sfxError = nil
+        Task {                       // View methods are @MainActor → safe to mutate state
+            defer { generatingID = nil }
+            do {
+                sfxByClip[clip.id] = try await service.generateSFX(for: clip)
+            } catch {
+                sfxError = error.localizedDescription
+            }
+        }
+    }
+
+    private func playSFX(_ sfx: SFXResponse) {
+        guard let data = Data(base64Encoded: sfx.audioB64) else {
+            sfxError = "Could not decode audio."
+            return
+        }
+        do {
+            player = try AVAudioPlayer(data: data)
+            player?.play()
+        } catch {
+            sfxError = "Could not play audio: \(error.localizedDescription)"
+        }
     }
 
     private var totalSeconds: Int {
@@ -480,6 +514,7 @@ private struct EditorView: View {
             Divider()
             previewArea
                 .padding(24)
+            sfxBar
             Spacer(minLength: 0)
             Divider()
             strip
@@ -531,6 +566,53 @@ private struct EditorView: View {
             .padding(32)
         }
         .frame(maxWidth: .infinity, minHeight: 320)
+    }
+
+    /// Sound-effect controls for the selected clip — generate, status, play.
+    @ViewBuilder
+    private var sfxBar: some View {
+        if let clip = currentClip {
+            let sfx = sfxByClip[clip.id]
+            HStack(spacing: 12) {
+                Image(systemName: "waveform")
+                    .font(.title3)
+                    .foregroundStyle(sfx == nil ? .secondary : Color.blue)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sound effect").font(.callout.weight(.semibold))
+                    if let err = sfxError {
+                        Text(err).font(.caption).foregroundStyle(.red).lineLimit(1)
+                    } else if let sfx {
+                        Text("“\(sfx.prompt)”")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    } else {
+                        Text("Generate a sound for the selected clip")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                if generatingID == clip.id {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button { generateSFX(for: clip) } label: {
+                        Label(sfx == nil ? "Generate SFX" : "Regenerate", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if let sfx {
+                    Button { playSFX(sfx) } label: { Label("Play", systemImage: "play.fill") }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Color(nsColor: .controlBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+            .padding(.horizontal, 24)
+        }
     }
 
     private let pxPerSec: CGFloat = 26

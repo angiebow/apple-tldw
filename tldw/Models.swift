@@ -42,6 +42,37 @@ struct LineScore: Codable, Identifiable {
     }
 }
 
+/// Request body for `POST /sfx` — generate a sound effect for one selected line.
+struct SFXRequest: Codable {
+    let text: String
+    let viralScore: Double?
+    let durationS: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case text
+        case viralScore = "viral_score"
+        case durationS = "duration_s"
+    }
+}
+
+/// Response body for `POST /sfx`. `audioB64` is a base64-encoded WAV clip.
+struct SFXResponse: Codable {
+    /// The text-to-audio prompt the backend derived from the line.
+    let prompt: String
+    let audioB64: String
+    let sampleRate: Int
+    let durationS: Double
+    /// Which audio model produced it (a stub until Stable Audio is wired up).
+    let model: String
+
+    enum CodingKeys: String, CodingKey {
+        case prompt, model
+        case audioB64 = "audio_b64"
+        case sampleRate = "sample_rate"
+        case durationS = "duration_s"
+    }
+}
+
 /// Which models produced the response (shown as provenance in the UI).
 struct ModelInfo: Codable {
     let summarizer: String
