@@ -82,3 +82,9 @@ models/
 .env
 .env.*
 !.env.example
+
+# ── Input/Output Files ──
+poc-transcription/input/
+poc-transcription/output/
+poc-audio-extraction/input/
+poc-audio-extraction/output/

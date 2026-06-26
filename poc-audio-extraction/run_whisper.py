@@ -39,7 +39,8 @@ def get_mlx_model_path(model_name: str) -> str:
         "large-v1": "mlx-community/whisper-large-v1-mlx",
         "large-v2": "mlx-community/whisper-large-v2-mlx",
         "large-v3": "mlx-community/whisper-large-v3-mlx",
-        "turbo": "mlx-community/whisper-large-v3-turbo"
+        "turbo": "mlx-community/whisper-large-v3-turbo",
+        "nemotron": "mlx-community/nemotron-3.5-asr-streaming-0.6b"
     }
     return mapping.get(model_name.lower(), f"mlx-community/whisper-{model_name}-mlx")
 
@@ -47,13 +48,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run Whisper STT guided by VAD segments.")
     parser.add_argument(
         "--audio",
-        default="output/preprocessed.wav",
-        help="Path to the preprocessed WAV file (default: output/preprocessed.wav)"
+        default="output/hot-ones_preprocessed.wav",
+        help="Path to the preprocessed WAV file (default: output/hot-ones_preprocessed.wav)"
     )
     parser.add_argument(
         "--vad",
-        default="output/vad_metadata.json",
-        help="Path to the VAD metadata JSON file (default: output/vad_metadata.json)"
+        default="output/hot-ones_vad_metadata.json",
+        help="Path to the VAD metadata JSON file (default: output/hot-ones_vad_metadata.json)"
     )
     parser.add_argument(
         "--output-dir",
@@ -62,8 +63,8 @@ def parse_args():
     )
     parser.add_argument(
         "--model",
-        default="medium",
-        help="Whisper model size to use (default: medium)"
+        default="nemotron",
+        help="Whisper model size to use (default: turbo)"
     )
     parser.add_argument(
         "--backend",
@@ -87,7 +88,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     print("═" * 60)
-    print("  🎙️  WHISPER STT — Transcription Pipeline")
+    print("  🎙️ Speech-To-Text — Transcription Pipeline")
     print("═" * 60)
     print(f"  🔊 Audio input   : {args.audio}")
     print(f"  📋 VAD segments  : {args.vad}")
