@@ -1,0 +1,11 @@
+torch
+torchaudio
+opencv-python   # Haar face detect + mouth frame-diff for the visual lip check
+numpy
+matplotlib
+pandas
+soundfile       # audio I/O for Silero VAD (avoids torchaudio>=2.9 / torchcodec)
+# Silero VAD is fetched at runtime via torch.hub (no pip package).
+# System prerequisite: ffmpeg (`brew install ffmpeg`).
+# NOTE: MediaPipe was dropped -- its wheels are unreliable on macOS-arm64;
+# the lip check uses OpenCV's bundled Haar cascade instead.

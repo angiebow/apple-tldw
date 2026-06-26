@@ -75,6 +75,12 @@ models/
 # HF tokenizer dumps shipped alongside checkpoints (large, regenerable)
 **/tokenizer.json
 
+# ── poc-blooper-detector — source media & generated clips ──
+poc-blooper-detector/input/*
+!poc-blooper-detector/input/.gitkeep
+poc-blooper-detector/out/*
+!poc-blooper-detector/out/.gitkeep
+
 # Server logs / runtime artifacts
 *.log
 
