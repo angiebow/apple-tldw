@@ -1,0 +1,37 @@
+{
+  "input_path": "/Users/satriabaladewaharahap/Downloads/Contoh Berita Singkat - Kelompok 5.mp4",
+  "preprocessed_audio_path": "",
+  "audio_metrics": {
+    "snr_db": 24.83,
+    "rms_db": -17.44,
+    "spectral_flatness": 0.2652,
+    "clipping_ratio": 0.0,
+    "duration_seconds": 109.087,
+    "sample_rate": 16000,
+    "num_channels": 1
+  },
+  "denoising": {
+    "decision": false,
+    "executed": false,
+    "strength": "none",
+    "backend": "DeepFilterNetDenoiser",
+    "reason": "Audio is clean: clean SNR (24.8 dB >= 20 dB); tonal spectrum (flatness=0.265)."
+  },
+  "agc": {
+    "applied": true
+  },
+  "normalization": {
+    "input_lufs": -14.14,
+    "output_lufs": -23.0,
+    "target_lufs": -23.0,
+    "gain_db": -8.86,
+    "clipping_prevented": false,
+    "normalization_applied": true
+  },
+  "vad_summary": {
+    "num_segments": 11,
+    "total_speech_duration_seconds": 74.004,
+    "speech_ratio": 0.6784
+  },
+  "processing_time_seconds": 0.859
+}

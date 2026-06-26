@@ -1,0 +1,32 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Audio Preprocessor – Production Requirements
+# Python 3.11+
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Core numeric / signal processing ──────────────────────────────────────────
+numpy>=1.24.0,<3.0.0
+scipy>=1.11.0               # used for resampling utilities (optional path)
+soundfile>=0.12.1           # WAV I/O for quality assessment and VAD loader
+
+# ── PyTorch (Silero VAD runtime) ───────────────────────────────────────────────
+# Install the CPU-only wheel if no CUDA GPU is available:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# For CUDA 12.x:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# ── DeepFilterNet denoiser ─────────────────────────────────────────────────────
+# Install from PyPI (CPU & GPU builds available):
+#   pip install deepfilterlib
+# The model weights (~20 MB) are downloaded automatically on first use.
+deepfilterlib>=0.5.6
+
+# ── Development / testing extras ──────────────────────────────────────────────
+# These are NOT needed at runtime; install with:  pip install -r requirements-dev.txt
+# Listed here for convenience of teams that use a single requirements file.
+
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# mypy>=1.6.0
+# ruff>=0.1.0

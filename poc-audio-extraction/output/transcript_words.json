@@ -1,0 +1,998 @@
+[
+  {
+    "word": "untuk",
+    "start": 12.642,
+    "end": 12.642,
+    "probability": 0.0687
+  },
+  {
+    "word": "membuatkan",
+    "start": 12.642,
+    "end": 12.682,
+    "probability": 0.1641
+  },
+  {
+    "word": "kekasih",
+    "start": 12.682,
+    "end": 12.842,
+    "probability": 0.3799
+  },
+  {
+    "word": "plastik",
+    "start": 12.842,
+    "end": 13.202,
+    "probability": 0.9873
+  },
+  {
+    "word": "menggunakan",
+    "start": 13.202,
+    "end": 13.722,
+    "probability": 0.8896
+  },
+  {
+    "word": "plastik",
+    "start": 13.722,
+    "end": 14.242,
+    "probability": 0.9834
+  },
+  {
+    "word": "hampir",
+    "start": 15.458,
+    "end": 15.898,
+    "probability": 0.835
+  },
+  {
+    "word": "semua",
+    "start": 15.898,
+    "end": 16.118,
+    "probability": 0.958
+  },
+  {
+    "word": "masyarakat",
+    "start": 16.118,
+    "end": 16.798,
+    "probability": 0.9985
+  },
+  {
+    "word": "menganggap",
+    "start": 16.798,
+    "end": 17.358,
+    "probability": 0.9941
+  },
+  {
+    "word": "bahwa",
+    "start": 17.358,
+    "end": 17.658,
+    "probability": 0.9746
+  },
+  {
+    "word": "operasi",
+    "start": 17.658,
+    "end": 18.098,
+    "probability": 0.9854
+  },
+  {
+    "word": "plastik",
+    "start": 18.098,
+    "end": 18.878,
+    "probability": 0.9868
+  },
+  {
+    "word": "menggunakan",
+    "start": 18.878,
+    "end": 19.498,
+    "probability": 0.9727
+  },
+  {
+    "word": "plastik",
+    "start": 19.498,
+    "end": 20.038,
+    "probability": 0.9946
+  },
+  {
+    "word": "untuk",
+    "start": 20.038,
+    "end": 20.398,
+    "probability": 0.9932
+  },
+  {
+    "word": "melakukan",
+    "start": 20.398,
+    "end": 20.818,
+    "probability": 0.9648
+  },
+  {
+    "word": "operasi.",
+    "start": 20.818,
+    "end": 21.318,
+    "probability": 0.9902
+  },
+  {
+    "word": "Pernahkah",
+    "start": 22.754,
+    "end": 23.294,
+    "probability": 0.9092
+  },
+  {
+    "word": "kalian",
+    "start": 23.294,
+    "end": 23.634,
+    "probability": 0.9688
+  },
+  {
+    "word": "memikirkan",
+    "start": 23.634,
+    "end": 24.714,
+    "probability": 0.9927
+  },
+  {
+    "word": "seperti",
+    "start": 24.714,
+    "end": 25.034,
+    "probability": 0.8667
+  },
+  {
+    "word": "apa",
+    "start": 25.034,
+    "end": 25.314,
+    "probability": 0.9653
+  },
+  {
+    "word": "sejarah",
+    "start": 25.314,
+    "end": 25.754,
+    "probability": 0.9917
+  },
+  {
+    "word": "operasi",
+    "start": 25.754,
+    "end": 26.114,
+    "probability": 0.9912
+  },
+  {
+    "word": "plastik?",
+    "start": 26.114,
+    "end": 26.654,
+    "probability": 0.9863
+  },
+  {
+    "word": "Kenapa",
+    "start": 28.034,
+    "end": 28.534,
+    "probability": 0.875
+  },
+  {
+    "word": "sih",
+    "start": 28.534,
+    "end": 28.734,
+    "probability": 0.8716
+  },
+  {
+    "word": "disebut",
+    "start": 28.734,
+    "end": 29.134,
+    "probability": 0.9854
+  },
+  {
+    "word": "dengan",
+    "start": 29.134,
+    "end": 29.414,
+    "probability": 0.9302
+  },
+  {
+    "word": "operasi",
+    "start": 29.414,
+    "end": 29.854,
+    "probability": 0.9717
+  },
+  {
+    "word": "plastik?",
+    "start": 29.854,
+    "end": 30.374,
+    "probability": 0.9795
+  },
+  {
+    "word": "Dan",
+    "start": 31.842,
+    "end": 32.162,
+    "probability": 0.5571
+  },
+  {
+    "word": "apakah",
+    "start": 32.162,
+    "end": 32.482,
+    "probability": 0.9736
+  },
+  {
+    "word": "operasi",
+    "start": 32.482,
+    "end": 32.882,
+    "probability": 0.9404
+  },
+  {
+    "word": "tersebut",
+    "start": 32.882,
+    "end": 33.262,
+    "probability": 0.998
+  },
+  {
+    "word": "memang",
+    "start": 33.262,
+    "end": 33.562,
+    "probability": 0.9062
+  },
+  {
+    "word": "menggunakan",
+    "start": 33.562,
+    "end": 34.062,
+    "probability": 0.9897
+  },
+  {
+    "word": "bahan",
+    "start": 34.062,
+    "end": 34.382,
+    "probability": 0.9951
+  },
+  {
+    "word": "dari",
+    "start": 34.382,
+    "end": 34.662,
+    "probability": 0.9663
+  },
+  {
+    "word": "plastik?",
+    "start": 34.662,
+    "end": 35.162,
+    "probability": 0.9927
+  },
+  {
+    "word": "Tadi",
+    "start": 36.93,
+    "end": 37.19,
+    "probability": 0.5122
+  },
+  {
+    "word": "mungkiri",
+    "start": 37.19,
+    "end": 37.91,
+    "probability": 0.7676
+  },
+  {
+    "word": "sudah",
+    "start": 37.91,
+    "end": 38.41,
+    "probability": 0.626
+  },
+  {
+    "word": "banyak",
+    "start": 38.41,
+    "end": 38.67,
+    "probability": 0.9961
+  },
+  {
+    "word": "penduduk",
+    "start": 38.67,
+    "end": 39.11,
+    "probability": 0.9985
+  },
+  {
+    "word": "di",
+    "start": 39.11,
+    "end": 39.25,
+    "probability": 0.9307
+  },
+  {
+    "word": "dunia",
+    "start": 39.25,
+    "end": 39.61,
+    "probability": 0.9932
+  },
+  {
+    "word": "ini",
+    "start": 39.61,
+    "end": 39.79,
+    "probability": 0.9893
+  },
+  {
+    "word": "yang",
+    "start": 39.79,
+    "end": 39.97,
+    "probability": 0.9248
+  },
+  {
+    "word": "melakukan",
+    "start": 39.97,
+    "end": 40.37,
+    "probability": 0.9922
+  },
+  {
+    "word": "operasi",
+    "start": 40.37,
+    "end": 40.85,
+    "probability": 0.9839
+  },
+  {
+    "word": "plastik.",
+    "start": 40.85,
+    "end": 41.69,
+    "probability": 0.9932
+  },
+  {
+    "word": "Mereka",
+    "start": 41.95,
+    "end": 42.21,
+    "probability": 0.9971
+  },
+  {
+    "word": "melakukannya",
+    "start": 42.21,
+    "end": 42.83,
+    "probability": 0.9775
+  },
+  {
+    "word": "mungkin",
+    "start": 42.83,
+    "end": 43.27,
+    "probability": 0.9819
+  },
+  {
+    "word": "karena",
+    "start": 43.27,
+    "end": 43.59,
+    "probability": 0.9644
+  },
+  {
+    "word": "beberapa",
+    "start": 43.59,
+    "end": 44.15,
+    "probability": 0.998
+  },
+  {
+    "word": "alasan.",
+    "start": 44.15,
+    "end": 44.87,
+    "probability": 0.9922
+  },
+  {
+    "word": "Seperti",
+    "start": 45.31,
+    "end": 45.67,
+    "probability": 0.9888
+  },
+  {
+    "word": "tidak",
+    "start": 45.67,
+    "end": 45.87,
+    "probability": 0.9902
+  },
+  {
+    "word": "percaya",
+    "start": 45.87,
+    "end": 46.27,
+    "probability": 0.9985
+  },
+  {
+    "word": "diri",
+    "start": 46.27,
+    "end": 46.99,
+    "probability": 0.998
+  },
+  {
+    "word": "atau",
+    "start": 46.99,
+    "end": 47.19,
+    "probability": 0.7383
+  },
+  {
+    "word": "tidak",
+    "start": 47.19,
+    "end": 47.55,
+    "probability": 0.9966
+  },
+  {
+    "word": "puas",
+    "start": 47.55,
+    "end": 47.81,
+    "probability": 0.9961
+  },
+  {
+    "word": "dengan",
+    "start": 47.81,
+    "end": 48.11,
+    "probability": 0.9888
+  },
+  {
+    "word": "penampilannya.",
+    "start": 48.11,
+    "end": 48.77,
+    "probability": 0.9756
+  },
+  {
+    "word": "Operasi",
+    "start": 50.53,
+    "end": 50.99,
+    "probability": 0.8979
+  },
+  {
+    "word": "plastik",
+    "start": 50.99,
+    "end": 51.41,
+    "probability": 0.9473
+  },
+  {
+    "word": "adalah",
+    "start": 51.41,
+    "end": 51.69,
+    "probability": 0.998
+  },
+  {
+    "word": "sebuah",
+    "start": 51.69,
+    "end": 51.97,
+    "probability": 0.9966
+  },
+  {
+    "word": "tindakan",
+    "start": 51.97,
+    "end": 52.41,
+    "probability": 0.9907
+  },
+  {
+    "word": "kedokteran",
+    "start": 52.41,
+    "end": 53.03,
+    "probability": 0.917
+  },
+  {
+    "word": "yang",
+    "start": 53.03,
+    "end": 53.21,
+    "probability": 0.9712
+  },
+  {
+    "word": "menitik",
+    "start": 53.21,
+    "end": 53.59,
+    "probability": 0.9399
+  },
+  {
+    "word": "beratkan",
+    "start": 53.59,
+    "end": 54.27,
+    "probability": 0.9468
+  },
+  {
+    "word": "pada",
+    "start": 54.27,
+    "end": 54.49,
+    "probability": 0.9585
+  },
+  {
+    "word": "rekonstruksi",
+    "start": 54.49,
+    "end": 55.63,
+    "probability": 0.9189
+  },
+  {
+    "word": "atau",
+    "start": 55.63,
+    "end": 56.11,
+    "probability": 0.8452
+  },
+  {
+    "word": "perbaikan",
+    "start": 56.11,
+    "end": 56.65,
+    "probability": 0.9966
+  },
+  {
+    "word": "cacat",
+    "start": 56.65,
+    "end": 57.07,
+    "probability": 0.9077
+  },
+  {
+    "word": "dan",
+    "start": 57.07,
+    "end": 57.23,
+    "probability": 0.9922
+  },
+  {
+    "word": "kekurangan",
+    "start": 57.23,
+    "end": 57.71,
+    "probability": 0.9956
+  },
+  {
+    "word": "fungsional",
+    "start": 57.71,
+    "end": 58.71,
+    "probability": 0.8589
+  },
+  {
+    "word": "pada",
+    "start": 58.71,
+    "end": 59.11,
+    "probability": 0.9316
+  },
+  {
+    "word": "fisik",
+    "start": 59.11,
+    "end": 59.45,
+    "probability": 0.9771
+  },
+  {
+    "word": "pasien",
+    "start": 59.45,
+    "end": 59.93,
+    "probability": 0.9854
+  },
+  {
+    "word": "yang",
+    "start": 59.93,
+    "end": 60.15,
+    "probability": 0.9956
+  },
+  {
+    "word": "dikarenakan",
+    "start": 60.15,
+    "end": 60.79,
+    "probability": 0.9653
+  },
+  {
+    "word": "oleh",
+    "start": 60.79,
+    "end": 61.07,
+    "probability": 0.9893
+  },
+  {
+    "word": "penyakit,",
+    "start": 61.07,
+    "end": 61.99,
+    "probability": 0.9956
+  },
+  {
+    "word": "cedera,",
+    "start": 62.17,
+    "end": 62.69,
+    "probability": 0.8433
+  },
+  {
+    "word": "penyakit",
+    "start": 63.05,
+    "end": 63.43,
+    "probability": 0.9941
+  },
+  {
+    "word": "lawaian",
+    "start": 63.43,
+    "end": 63.95,
+    "probability": 0.8149
+  },
+  {
+    "word": "dan",
+    "start": 63.95,
+    "end": 64.17,
+    "probability": 0.5132
+  },
+  {
+    "word": "pembedahan",
+    "start": 64.17,
+    "end": 64.77,
+    "probability": 0.9043
+  },
+  {
+    "word": "yang",
+    "start": 64.77,
+    "end": 64.93,
+    "probability": 0.9961
+  },
+  {
+    "word": "pernah",
+    "start": 64.93,
+    "end": 65.17,
+    "probability": 0.9917
+  },
+  {
+    "word": "dijalani.",
+    "start": 65.17,
+    "end": 65.73,
+    "probability": 0.8916
+  },
+  {
+    "word": "Jadi,",
+    "start": 67.458,
+    "end": 68.098,
+    "probability": 0.6104
+  },
+  {
+    "word": "kenapa",
+    "start": 68.698,
+    "end": 68.958,
+    "probability": 0.9756
+  },
+  {
+    "word": "dinamakan",
+    "start": 68.958,
+    "end": 69.478,
+    "probability": 0.978
+  },
+  {
+    "word": "operasi",
+    "start": 69.478,
+    "end": 69.938,
+    "probability": 0.9678
+  },
+  {
+    "word": "plastik?",
+    "start": 69.938,
+    "end": 70.498,
+    "probability": 0.9912
+  },
+  {
+    "word": "Bukan",
+    "start": 71.01,
+    "end": 71.35,
+    "probability": 0.9028
+  },
+  {
+    "word": "berarti",
+    "start": 71.35,
+    "end": 71.87,
+    "probability": 0.9927
+  },
+  {
+    "word": "operasi",
+    "start": 71.87,
+    "end": 72.39,
+    "probability": 0.9678
+  },
+  {
+    "word": "menggunakan",
+    "start": 72.39,
+    "end": 72.91,
+    "probability": 0.9868
+  },
+  {
+    "word": "bahan",
+    "start": 72.91,
+    "end": 73.21,
+    "probability": 0.9966
+  },
+  {
+    "word": "plastik",
+    "start": 73.21,
+    "end": 73.79,
+    "probability": 0.9976
+  },
+  {
+    "word": "ya?",
+    "start": 73.79,
+    "end": 73.99,
+    "probability": 0.7183
+  },
+  {
+    "word": "Operasi",
+    "start": 75.042,
+    "end": 75.522,
+    "probability": 0.8594
+  },
+  {
+    "word": "plastik",
+    "start": 75.522,
+    "end": 75.942,
+    "probability": 0.9946
+  },
+  {
+    "word": "berasal",
+    "start": 75.942,
+    "end": 76.362,
+    "probability": 0.9897
+  },
+  {
+    "word": "dari",
+    "start": 76.362,
+    "end": 76.622,
+    "probability": 0.9917
+  },
+  {
+    "word": "dua",
+    "start": 76.622,
+    "end": 76.822,
+    "probability": 0.9131
+  },
+  {
+    "word": "kata,",
+    "start": 76.822,
+    "end": 77.442,
+    "probability": 0.9985
+  },
+  {
+    "word": "yaitu",
+    "start": 77.682,
+    "end": 77.962,
+    "probability": 0.9868
+  },
+  {
+    "word": "operasi",
+    "start": 77.962,
+    "end": 78.462,
+    "probability": 0.9619
+  },
+  {
+    "word": "yang",
+    "start": 78.462,
+    "end": 78.602,
+    "probability": 0.8096
+  },
+  {
+    "word": "artinya",
+    "start": 78.602,
+    "end": 78.942,
+    "probability": 0.9941
+  },
+  {
+    "word": "pembedahan",
+    "start": 78.942,
+    "end": 79.682,
+    "probability": 0.8584
+  },
+  {
+    "word": "dan",
+    "start": 79.682,
+    "end": 80.182,
+    "probability": 0.7241
+  },
+  {
+    "word": "plastik",
+    "start": 80.182,
+    "end": 80.702,
+    "probability": 0.9971
+  },
+  {
+    "word": "yang",
+    "start": 80.702,
+    "end": 80.922,
+    "probability": 0.9849
+  },
+  {
+    "word": "berasal",
+    "start": 80.922,
+    "end": 81.322,
+    "probability": 0.9971
+  },
+  {
+    "word": "dari",
+    "start": 81.322,
+    "end": 81.562,
+    "probability": 0.9634
+  },
+  {
+    "word": "bahasa",
+    "start": 81.562,
+    "end": 81.862,
+    "probability": 0.9707
+  },
+  {
+    "word": "latin",
+    "start": 81.862,
+    "end": 82.262,
+    "probability": 0.9048
+  },
+  {
+    "word": "plastikos",
+    "start": 82.262,
+    "end": 83.022,
+    "probability": 0.8823
+  },
+  {
+    "word": "yang",
+    "start": 83.022,
+    "end": 83.562,
+    "probability": 0.5596
+  },
+  {
+    "word": "artinya",
+    "start": 83.562,
+    "end": 83.982,
+    "probability": 0.9941
+  },
+  {
+    "word": "membentuk",
+    "start": 83.982,
+    "end": 84.582,
+    "probability": 0.9424
+  },
+  {
+    "word": "atau",
+    "start": 84.582,
+    "end": 84.822,
+    "probability": 0.9927
+  },
+  {
+    "word": "merubah",
+    "start": 84.822,
+    "end": 85.242,
+    "probability": 0.8921
+  },
+  {
+    "word": "bentuk.",
+    "start": 85.242,
+    "end": 85.642,
+    "probability": 0.9951
+  },
+  {
+    "word": "Pemirsa,",
+    "start": 86.754,
+    "end": 87.514,
+    "probability": 0.9634
+  },
+  {
+    "word": "sekian",
+    "start": 87.794,
+    "end": 87.994,
+    "probability": 0.9961
+  },
+  {
+    "word": "perjumpaan",
+    "start": 87.994,
+    "end": 88.554,
+    "probability": 0.9824
+  },
+  {
+    "word": "kita",
+    "start": 88.554,
+    "end": 88.794,
+    "probability": 0.9375
+  },
+  {
+    "word": "kali",
+    "start": 88.794,
+    "end": 89.014,
+    "probability": 0.9946
+  },
+  {
+    "word": "ini.",
+    "start": 89.014,
+    "end": 89.554,
+    "probability": 0.9976
+  },
+  {
+    "word": "Nantikan",
+    "start": 89.694,
+    "end": 89.994,
+    "probability": 0.9258
+  },
+  {
+    "word": "terus",
+    "start": 89.994,
+    "end": 90.274,
+    "probability": 0.9819
+  },
+  {
+    "word": "berita",
+    "start": 90.274,
+    "end": 90.634,
+    "probability": 0.9917
+  },
+  {
+    "word": "selanjutnya",
+    "start": 90.634,
+    "end": 91.274,
+    "probability": 0.9946
+  },
+  {
+    "word": "hanya",
+    "start": 91.274,
+    "end": 91.514,
+    "probability": 0.7437
+  },
+  {
+    "word": "di",
+    "start": 91.514,
+    "end": 91.734,
+    "probability": 0.9873
+  },
+  {
+    "word": "Berita",
+    "start": 91.734,
+    "end": 92.014,
+    "probability": 0.894
+  },
+  {
+    "word": "Terkini.",
+    "start": 92.014,
+    "end": 92.634,
+    "probability": 0.8975
+  },
+  {
+    "word": "Saya",
+    "start": 93.034,
+    "end": 93.194,
+    "probability": 0.9834
+  },
+  {
+    "word": "Efi",
+    "start": 93.194,
+    "end": 93.454,
+    "probability": 0.4189
+  },
+  {
+    "word": "Suryani",
+    "start": 93.454,
+    "end": 93.914,
+    "probability": 0.8257
+  },
+  {
+    "word": "bersama",
+    "start": 93.914,
+    "end": 94.374,
+    "probability": 0.8916
+  },
+  {
+    "word": "kru",
+    "start": 94.374,
+    "end": 94.534,
+    "probability": 0.8535
+  },
+  {
+    "word": "yang",
+    "start": 94.534,
+    "end": 94.654,
+    "probability": 0.9648
+  },
+  {
+    "word": "bertugas.",
+    "start": 94.654,
+    "end": 95.334,
+    "probability": 0.9937
+  },
+  {
+    "word": "Pamit",
+    "start": 95.494,
+    "end": 95.754,
+    "probability": 0.73
+  },
+  {
+    "word": "undur",
+    "start": 95.754,
+    "end": 96.074,
+    "probability": 0.9268
+  },
+  {
+    "word": "diri,",
+    "start": 96.074,
+    "end": 96.354,
+    "probability": 0.9834
+  },
+  {
+    "word": "terima",
+    "start": 96.374,
+    "end": 96.634,
+    "probability": 0.873
+  },
+  {
+    "word": "kasih",
+    "start": 96.634,
+    "end": 96.914,
+    "probability": 0.9985
+  },
+  {
+    "word": "dan",
+    "start": 96.914,
+    "end": 97.214,
+    "probability": 0.7114
+  },
+  {
+    "word": "sampai",
+    "start": 97.214,
+    "end": 97.534,
+    "probability": 0.9937
+  },
+  {
+    "word": "jumpa.",
+    "start": 97.534,
+    "end": 98.054,
+    "probability": 0.9941
+  }
+]
