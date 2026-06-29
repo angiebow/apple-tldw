@@ -121,6 +121,79 @@ _to_wav_bytes(wav, sr)                   # float → 16-bit PCM → WAV containe
 }
 ```
 
+## Architectural overview
+
+Two pretrained models sit at the heart of the pipeline. Neither is fine-tuned by
+tldw — both are used off-the-shelf, the first as a feature extractor and the
+second as a generator.
+
+### Emotion classifier — `j-hartmann/emotion-english-distilroberta-base`
+
+A **DistilRoBERTa encoder** fine-tuned for single-label emotion classification.
+
+```mermaid
+flowchart LR
+    T["clip text"] --> TOK["BPE tokenizer<br/>→ token ids"]
+    TOK --> ENC["DistilRoBERTa encoder<br/>6 transformer layers · 768 hidden"]
+    ENC --> POOL["[CLS] pooled vector"]
+    POOL --> HEAD["linear head<br/>768 → 7"]
+    HEAD --> SM["softmax<br/>7-emotion distribution"]
+```
+
+- **Backbone**: DistilRoBERTa — a distilled, 6-layer (~82 M param) version of
+  RoBERTa-base. Encoder-only; bidirectional self-attention, no decoder.
+- **Input**: a single text span, byte-pair-encoded, capped at 512 tokens.
+- **Head**: the pooled representation feeds a linear classification head over the
+  7 Ekman-style emotions (anger, disgust, fear, joy, neutral, sadness, surprise).
+- **Output we use**: the full **softmax distribution**, not just the argmax — tldw
+  treats the probabilities as weights to interpolate a continuous valence/arousal
+  point (see Stage 1). This makes mixed/ambiguous lines degrade gracefully instead
+  of snapping between discrete moods.
+- **Cost profile**: a single forward pass, milliseconds on any device; negligible
+  next to MusicGen.
+
+### Music generator — `facebook/musicgen-small`
+
+A **conditional autoregressive Transformer** over discrete audio tokens — *not* a
+diffusion model. Three sub-models cooperate inside
+`MusicgenForConditionalGeneration`.
+
+```mermaid
+flowchart LR
+    P["music prompt"] --> T5["T5 text encoder<br/>(frozen)"]
+    T5 --> EMB["text embeddings"]
+    EMB -. cross-attention .-> DEC["Transformer decoder<br/>~300 M param"]
+    DEC --> TOK["EnCodec RVQ tokens<br/>4 codebooks · delay pattern"]
+    TOK --> ENCODEC["EnCodec decoder"]
+    ENCODEC --> WAV["32 kHz mono waveform"]
+```
+
+- **Conditioning (T5)**: a frozen **T5 text encoder** maps the prompt to
+  token-level embeddings. MusicGen only ever sees the text prompt — no audio
+  reference, no melody conditioning in this configuration.
+- **Generator (decoder)**: a Transformer **decoder** autoregressively predicts
+  EnCodec residual-vector-quantization tokens, attending to the T5 embeddings via
+  **cross-attention**. Each ~20 ms frame is 4 codebook tokens (coarse→fine),
+  emitted on a **delay/interleaving pattern** so the four streams stay
+  autoregressive without quadrupling sequence length. `max_new_tokens = seconds ×
+  50` controls clip length (~50 tokens/sec).
+- **Decoder of audio (EnCodec)**: predicted tokens pass through the **EnCodec
+  decoder** to reconstruct a 32 kHz mono waveform.
+- **Sampling**: `do_sample=True` with **classifier-free guidance** (`guidance_scale
+  = 3.0`) trades diversity for prompt adherence.
+- **Cost profile**: frame-by-frame decode dominates the request (~10–30 s on MPS
+  for a few seconds of audio). `-small` is ~300 M params; `-medium`/`-large` raise
+  quality and latency proportionally (override via `TLDW_MUSICGEN`).
+
+### How they connect
+
+The classifier is a **feature extractor** whose output is *not* fed directly to
+MusicGen. Between them sits a deterministic, rule-based bridge
+(`_va_to_music_prompt()`): emotion probabilities → valence/arousal → a natural-
+language music prompt → MusicGen. Keeping the bridge symbolic (rather than, say,
+learning a text-to-text mapping) makes the mood→music translation inspectable and
+tunable without retraining either model.
+
 ## Models & configuration
 
 | Role | Default | Override |
