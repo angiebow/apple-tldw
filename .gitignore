@@ -84,8 +84,10 @@ models/
 !.env.example
 
 # ── Input/Output Files ──
+poc-audio-extraction/input/
+poc-audio-extraction/output/
 poc-transcription/notebooks/
 poc-transcription/input/
 poc-transcription/output/
-poc-audio-extraction/input/
-poc-audio-extraction/output/
+poc-subtitles/input/
+poc-subtitles/output/
