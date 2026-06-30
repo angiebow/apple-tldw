@@ -518,6 +518,8 @@ private struct EditorView: View {
             Spacer(minLength: 0)
             Divider()
             strip
+            Divider()
+            BlooperPanel()   // video input + dead-air spans, under the line sequence
         }
     }
 

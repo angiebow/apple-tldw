@@ -98,6 +98,39 @@ struct HighlightService {
         }
     }
 
+    /// Detect non-speech "blooper" spans in a local video file.
+    func detectBloopers(videoPath: String,
+                        useLipCheck: Bool = true) async throws -> BlooperResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("bloopers"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 600  // first call downloads Silero VAD + decodes the whole video
+
+        request.httpBody = try JSONEncoder().encode(
+            BlooperRequest(videoPath: videoPath, useLipCheck: useLipCheck))
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw HighlightError.transport(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw HighlightError.transport("no HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            throw HighlightError.badStatus(http.statusCode, serverDetail(data))
+        }
+
+        do {
+            return try JSONDecoder().decode(BlooperResponse.self, from: data)
+        } catch {
+            throw HighlightError.transport("could not decode bloopers response: \(error.localizedDescription)")
+        }
+    }
+
     /// Pull the human-readable `detail` field out of a FastAPI error body.
     private func serverDetail(_ data: Data) -> String {
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

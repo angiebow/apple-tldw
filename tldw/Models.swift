@@ -74,6 +74,54 @@ struct BacksoundResponse: Codable {
     }
 }
 
+/// Request body for `POST /bloopers` — find non-speech spans in a local video.
+/// Any non-speech span counts as a blooper; there is no duration threshold.
+struct BlooperRequest: Codable {
+    /// Absolute path to the source video on this machine (app + backend share disk).
+    let videoPath: String
+    let useLipCheck: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case videoPath = "video_path"
+        case useLipCheck = "use_lip_check"
+    }
+}
+
+/// One detected non-speech span: a candidate "blooper" (silence / pause / dead air).
+struct BlooperSpan: Codable, Identifiable {
+    /// Position of the span in the detected list (stable id).
+    let index: Int
+    /// Start / end of the span in the source video, in seconds.
+    let start: Double
+    let end: Double
+    let duration: Double
+    /// Mean mouth motion over the span; nil when no face was found (`no_face`).
+    let lipMotion: Double?
+    /// "silent" | "lips_moving" | "no_face" — the verdict from the lip check.
+    let label: String
+
+    var id: Int { index }
+
+    enum CodingKeys: String, CodingKey {
+        case index, start, end, duration, label
+        case lipMotion = "lip_motion"
+    }
+}
+
+/// Response body for `POST /bloopers`.
+struct BlooperResponse: Codable {
+    let source: String
+    /// Total duration of the source video, in seconds.
+    let durationS: Double
+    let count: Int
+    let bloopers: [BlooperSpan]
+
+    enum CodingKeys: String, CodingKey {
+        case source, count, bloopers
+        case durationS = "duration_s"
+    }
+}
+
 /// Which models produced the response (shown as provenance in the UI).
 struct ModelInfo: Codable {
     let summarizer: String

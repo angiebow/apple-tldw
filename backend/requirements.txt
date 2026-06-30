@@ -9,3 +9,7 @@ numpy
 scipy
 sentencepiece
 protobuf
+soundfile        # audio I/O for the blooper detector's Silero VAD
+opencv-python    # Haar face + mouth frame-diff for the blooper lip check
+# Blooper detection also needs ffmpeg on PATH (`brew install ffmpeg`);
+# Silero VAD itself is fetched at runtime via torch.hub (no pip package).

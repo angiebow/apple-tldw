@@ -19,6 +19,7 @@ import base64
 import io
 import os
 import re
+import sys
 import wave
 from typing import Optional
 
@@ -56,6 +57,11 @@ MUSICGEN_NAME     = os.environ.get("TLDW_MUSICGEN", "facebook/musicgen-small")
 MUSIC_DEVICE      = os.environ.get("TLDW_MUSIC_DEVICE", DEVICE)  # set =cpu if MPS misbehaves
 MUSIC_MAX_SECONDS = 15.0
 MUSICGEN_TOK_RATE = 50                   # MusicGen emits ~50 audio tokens / second
+
+# Bloopers: Silero VAD inverts speech → non-speech ("blooper") spans, with an
+# optional OpenCV lip-motion check. The pipeline lives in the PoC module.
+POC_BLOOPER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "poc-blooper-detector")
 
 # ── Lazy-loaded model singletons ─────────────────────────────────────────
 _models = {}
@@ -276,6 +282,23 @@ def _generate_music(prompt: str, seconds: float, m) -> tuple[bytes, int]:
     return _to_wav_bytes(wav, sr), sr
 
 
+# ── Bloopers (Silero VAD → non-speech spans) ───────────────────────────────
+# The detection pipeline lives in poc-blooper-detector/blooper.py. We import it
+# lazily and cache the module: its top level only needs numpy, but Silero VAD
+# (torch.hub) and OpenCV are pulled in on the first detect() call, so /highlight
+# startup is unaffected.
+_blooper = {}
+
+
+def _load_blooper():
+    if "mod" not in _blooper:
+        if POC_BLOOPER_DIR not in sys.path:
+            sys.path.insert(0, POC_BLOOPER_DIR)
+        import blooper  # noqa: E402  (intentionally deferred)
+        _blooper["mod"] = blooper
+    return _blooper["mod"]
+
+
 # ── API ──────────────────────────────────────────────────────────────────
 app = FastAPI(title="tldw highlighter")
 
@@ -288,6 +311,11 @@ class HighlightRequest(BaseModel):
 class BacksoundRequest(BaseModel):
     text: str                             # line (or whole-Short text) to read mood from
     duration_s: Optional[int] = None      # bed length; defaults to a spoken estimate
+
+
+class BlooperRequest(BaseModel):
+    video_path: str                       # absolute path to the source video (local)
+    use_lip_check: bool = True            # confirm a still mouth with the visual check
 
 
 @app.get("/health")
@@ -363,4 +391,48 @@ def backsound(req: BacksoundRequest):
         "sample_rate": sr,
         "duration_s": round(seconds, 2),
         "model": MUSICGEN_NAME,
+    }
+
+
+@app.post("/bloopers")
+def bloopers(req: BlooperRequest):
+    """Find non-speech 'blooper' spans (silence / pauses / dead air) in a video.
+
+    The macOS app picks the source video and sends its local path; the app then
+    previews each span by seeking the source video, so we only return span
+    metadata here (no clip cutting)."""
+    path = os.path.expanduser(req.video_path.strip())
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=400, detail=f"Video not found: {req.video_path}")
+
+    mod = _load_blooper()
+    try:
+        # min_dur=0: any non-speech span counts as a blooper, no duration floor.
+        # (merge_gap / pad stay at the module defaults — VAD-flicker smoothing and
+        # edge padding so we don't fragment one pause or clip the surrounding words.)
+        spans = mod.detect(
+            path,
+            min_dur=0.0,
+            use_lip_check=req.use_lip_check,
+        )
+        duration = mod.video_duration(path)
+    except Exception as exc:  # ffmpeg / VAD / decode failures → 500 with the reason
+        raise HTTPException(status_code=500, detail=f"Blooper detection failed: {exc}")
+
+    return {
+        "source": os.path.basename(path),
+        "duration_s": round(duration, 3),
+        "count": len(spans),
+        "params": {"lip_check": req.use_lip_check},
+        "bloopers": [
+            {
+                "index": i,
+                "start": b.start,
+                "end": b.end,
+                "duration": b.duration,
+                "lip_motion": b.lip_motion,
+                "label": b.label,
+            }
+            for i, b in enumerate(spans)
+        ],
     }
