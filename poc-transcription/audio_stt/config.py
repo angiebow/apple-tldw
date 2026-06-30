@@ -13,15 +13,19 @@ class WhisperConfig:
 
     Attributes:
         model: MLX-community Hugging Face repo for the Whisper model.
-        max_chunk_duration: Max seconds of audio fed to the model in one call.
-            VAD segments longer than this get split at the next-best VAD
-            boundary; shorter ones get merged together up to this limit.
-        max_merge_gap: Max silence gap (seconds) allowed between two VAD
-            segments for them to be merged into the same chunk.
         sample_rate: Target sample rate for the input audio (Whisper expects 16kHz).
+        language: Language code, or None to let Whisper auto-detect.
+        sanitize_min_duration: Segments shorter than this (seconds) are dropped
+            as hallucination artifacts.
+        sanitize_max_segments_per_second: Sliding-window density cap — more
+            segments than this in any 1s window indicates decoder collapse.
+        sanitize_duplicate_timestamp_threshold: Number of consecutive segments
+            sharing an identical start timestamp before they're treated as a
+            decoder stall rather than real rapid-fire speech.
     """
     model: str = "mlx-community/whisper-large-v3-turbo"
-    max_chunk_duration: float = 45.0
-    max_merge_gap: float = 2.5
     sample_rate: int = 16000
     language: str | None = "en"
+    sanitize_min_duration: float = 0.01
+    sanitize_max_segments_per_second: float = 8.0
+    sanitize_duplicate_timestamp_threshold: int = 5

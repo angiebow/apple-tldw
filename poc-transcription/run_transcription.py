@@ -2,7 +2,7 @@
 """
 run_transcription.py
 =====================
-CLI entry point for the Whisper transcription pipeline.
+CLI entry point for the single-pass Whisper transcription pipeline.
 """
 
 import argparse
@@ -16,13 +16,14 @@ from audio_stt.transcriber import WhisperTranscriber
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run MLX Whisper STT guided by VAD segments.")
+    parser = argparse.ArgumentParser(description="Run single-pass MLX Whisper STT.")
     parser.add_argument("--audio", default="input/hot-ones_preprocessed.wav")
-    parser.add_argument("--vad", default="input/hot-ones_vad_metadata.json")
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--model", default="mlx-community/whisper-large-v3-turbo")
-    parser.add_argument("--max-chunk-duration", type=float, default=45.0)
-    parser.add_argument("--max-merge-gap", type=float, default=1.0)
+    parser.add_argument("--language", default="en")
+    parser.add_argument("--sanitize-min-duration", type=float, default=0.01)
+    parser.add_argument("--sanitize-max-segments-per-second", type=float, default=8.0)
+    parser.add_argument("--sanitize-duplicate-timestamp-threshold", type=int, default=5)
     return parser.parse_args()
 
 
@@ -32,17 +33,16 @@ def main():
     if not os.path.isfile(args.audio):
         print(f"❌ Audio file not found: {args.audio}", file=sys.stderr)
         sys.exit(1)
-    if not os.path.isfile(args.vad):
-        print(f"❌ VAD metadata file not found: {args.vad}", file=sys.stderr)
-        sys.exit(1)
 
     config = WhisperConfig(
         model=args.model,
-        max_chunk_duration=args.max_chunk_duration,
-        max_merge_gap=args.max_merge_gap,
+        language=args.language,
+        sanitize_min_duration=args.sanitize_min_duration,
+        sanitize_max_segments_per_second=args.sanitize_max_segments_per_second,
+        sanitize_duplicate_timestamp_threshold=args.sanitize_duplicate_timestamp_threshold,
     )
 
-    transcriber = WhisperTranscriber(audio_path=args.audio, vad_path=args.vad, config=config)
+    transcriber = WhisperTranscriber(audio_path=args.audio, config=config)
 
     pipeline_start = time.perf_counter()
     segments, words = transcriber.run()

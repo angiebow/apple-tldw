@@ -28,11 +28,19 @@ class TranscriptSegment:
 
 @dataclass
 class TranscriptWord:
-    """A transcribed word with global timestamps and model confidence."""
+    """
+    A transcribed word with global timestamps and model confidence.
+
+    segment_id links this word back to the TranscriptSegment it came from,
+    so the sanitizer can drop a segment's words when the segment itself is
+    flagged as a hallucination artifact. Not written to transcript_words.json
+    (see to_dict) — downstream consumers (subtitles, NLP) don't need it.
+    """
     word: str
     start: float
     end: float
     probability: float
+    segment_id: int
 
     def to_dict(self) -> Dict[str, Any]:
         return {
