@@ -181,6 +181,14 @@ available. Typical order:
 3. `poc-content-highlighter/preprocess_youtube_trending.ipynb` — build the
    labeled splits, then `no3_compare_detectors.ipynb` and
    `no4_compare_rerankers.ipynb` to train/compare the virality models.
+4. `poc-video-clipper/run_llm_pipeline.py` — The ultimate End-to-End One-Click Automated Video Clipper. Evaluates virality using local Llama 3.2 3B via MLX, segments scenes grammatically (>= 10s), and renders physical H.264 clips with AGC & Denoised clean audio.
+
+### Running the Automated Video Clipper
+To run the automated end-to-end video clipper, navigate to the `poc-video-clipper/` folder and execute the interactive Python script:
+```bash
+python run_llm_pipeline.py
+```
+Simply drag & drop your raw `.mp4` video file into the terminal prompt, and the script will automatically handle audio preprocessing (denoise + AGC), Whisper transcription, Llama virality scoring, and physical clip rendering!
 
 ---
 

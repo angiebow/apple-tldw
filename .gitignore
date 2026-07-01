@@ -82,3 +82,9 @@ models/
 .env
 .env.*
 !.env.example
+
+# ── Video Clipper Outputs (Temporary & Large Media Files) ──
+poc-video-clipper/output/
+poc-video-clipper/output_clips/
+poc-video-clipper/scene_rankings.json
+
