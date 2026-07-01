@@ -503,6 +503,17 @@ class ClipRequest(BaseModel):
     segments: Optional[list[TranscriptSegmentIn]] = None
 
 
+class MergeRequest(BaseModel):
+    video_path: str                       # absolute path to the source video (local)
+    clips: list[ClipSpan]                 # spans to concatenate into one Short, in order
+    name: Optional[str] = None            # output file stem (defaults to <source>_merged)
+    vertical: bool = True                 # render 1080×1920 portrait
+    subtitles: bool = True                # burn karaoke captions (needs ffmpeg libass)
+    # Full transcript segments with per-word times; words overlapping each span
+    # caption it. Optional (no words → no captions).
+    segments: Optional[list[TranscriptSegmentIn]] = None
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "device": DEVICE}
@@ -742,4 +753,57 @@ def clip(req: ClipRequest):
              "srt": srt_paths.get(p)}
             for i, (p, s) in enumerate(zip(written, spans))
         ],
+    }
+
+
+@app.post("/merge")
+def merge(req: MergeRequest):
+    """Render the given spans as portrait+captioned segments and concatenate them
+    into one merged Short (.mp4).
+
+    Same span/word handling as /clip, but instead of returning per-clip files it
+    stitches the segments into a single video and returns that path so the app can
+    save / reveal it."""
+    path = os.path.expanduser(req.video_path.strip())
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=400, detail=f"Source video not found: {req.video_path}")
+
+    # Flatten transcript words; each span is captioned with the words overlapping it.
+    all_words = [{"word": w.word, "start": w.start, "end": w.end}
+                 for seg in (req.segments or []) for w in (seg.words or [])]
+
+    def words_in(a: float, b: float) -> list:
+        return [w for w in all_words if w["start"] < b and w["end"] > a]
+
+    spans = [{"start": c.start, "end": c.end, "text": c.text, "words": words_in(c.start, c.end)}
+             for c in req.clips if c.end > c.start]
+    if not spans:
+        raise HTTPException(status_code=400, detail="No valid clip spans to merge.")
+
+    stem = os.path.splitext(os.path.basename(path))[0]
+    name = (req.name or f"{stem}_merged").strip() or f"{stem}_merged"
+    out_dir = os.path.join(CLIPS_OUT_DIR, name)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{name}.mp4")
+
+    mod = _load_clipper()
+    subtitles_applied = req.subtitles and mod.ffmpeg_has_subtitles()
+    try:
+        written = mod.merge_clips(path, spans, out_path,
+                                  vertical=req.vertical, subtitles=req.subtitles)
+    except Exception as exc:  # ffmpeg failure / bad path → 500 with the reason
+        detail = getattr(exc, "stderr", None) or str(exc)
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", "replace")
+        raise HTTPException(status_code=500, detail=f"Merge failed: {detail}")
+
+    return {
+        "source": os.path.basename(path),
+        "output_dir": out_dir,
+        "path": written,
+        "clip_count": len(spans),
+        "vertical": req.vertical,
+        # True only if captions were actually burned (requested AND ffmpeg has libass).
+        "subtitles_applied": subtitles_applied,
+        "subtitles_requested": req.subtitles,
     }

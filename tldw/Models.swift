@@ -236,6 +236,45 @@ struct ClipResponse: Codable {
     }
 }
 
+/// Request body for `POST /merge` — concatenate selected spans into one Short.
+struct MergeRequest: Codable {
+    let videoPath: String
+    let clips: [ClipSpan]
+    /// Output file stem; nil lets the backend use `<source>_merged`.
+    let name: String?
+    /// Render 1080×1920 portrait, and burn karaoke captions (libass permitting).
+    let vertical: Bool
+    let subtitles: Bool
+    /// Full transcript segments (with per-word times) used to caption the Short.
+    let segments: [TranscriptSegment]?
+
+    enum CodingKeys: String, CodingKey {
+        case clips, name, vertical, subtitles, segments
+        case videoPath = "video_path"
+    }
+}
+
+/// Response body for `POST /merge` — one concatenated Short written to disk.
+struct MergeResponse: Codable {
+    let source: String
+    /// Folder the merged Short was written into.
+    let outputDir: String
+    /// Absolute path to the written .mp4.
+    let path: String
+    let clipCount: Int
+    let vertical: Bool
+    let subtitlesApplied: Bool
+    let subtitlesRequested: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case source, path, vertical
+        case outputDir = "output_dir"
+        case clipCount = "clip_count"
+        case subtitlesApplied = "subtitles_applied"
+        case subtitlesRequested = "subtitles_requested"
+    }
+}
+
 /// Which models produced the response (shown as provenance in the UI).
 struct ModelInfo: Codable {
     let summarizer: String

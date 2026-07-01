@@ -12,6 +12,7 @@ Penggunaan:
 import os
 import sys
 import json
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -236,6 +237,58 @@ def cut_clips(video_path: str, clips: list, output_dir: str,
             written.append(os.path.abspath(output_path))
 
     return written
+
+
+def _concat(paths: list, output_path: str) -> None:
+    """Concatenate uniformly-encoded segments into one file via the concat demuxer.
+
+    All segments come from :func:`cut_clips`, so they share codec/size/timebase
+    (libx264 / aac / 1080×1920) and can be stream-copied without re-encoding."""
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        list_path = f.name
+        for p in paths:
+            # concat demuxer: single-quote paths, escaping any embedded quotes.
+            safe = os.path.abspath(p).replace("'", "'\\''")
+            f.write(f"file '{safe}'\n")
+    try:
+        cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+               "-c", "copy", output_path]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    finally:
+        os.unlink(list_path)
+
+
+def merge_clips(video_path: str, clips: list, output_path: str,
+                clean_audio_path: str = None,
+                vertical: bool = True, subtitles: bool = True) -> str:
+    """Render each ``{start, end, text[, words]}`` span as a portrait+captioned
+    segment (same pipeline as :func:`cut_clips`), then concatenate the segments
+    into a single Short at *output_path*.
+
+    Returns the absolute path to the written merged .mp4.
+
+    Raises:
+        FileNotFoundError: if *video_path* does not exist.
+        ValueError:        if no span produced a segment.
+        subprocess.CalledProcessError: if an ffmpeg render/concat fails.
+    """
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Source video not found: {video_path}")
+
+    out_abs = os.path.abspath(output_path)
+    os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="tldw_merge_") as seg_dir:
+        segments = cut_clips(video_path, clips, seg_dir,
+                             clean_audio_path=clean_audio_path,
+                             vertical=vertical, subtitles=subtitles)
+        if not segments:
+            raise ValueError("No valid clip spans to merge.")
+        if len(segments) == 1:
+            shutil.copyfile(segments[0], out_abs)
+        else:
+            _concat(segments, out_abs)
+    return out_abs
 
 
 if __name__ == "__main__":

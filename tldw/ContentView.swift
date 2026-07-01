@@ -682,7 +682,8 @@ private struct EditorView: View {
 
     var body: some View {
         if showMergePreview {
-            MergePreviewView(items: mergeItems, videoURL: blooperVideoURL,
+            MergePreviewView(items: mergeItems, videoURL: sourceVideoURL ?? blooperVideoURL,
+                             segments: transcriptSegments,
                              onBack: { showMergePreview = false })
         } else {
             editorBody
@@ -1246,7 +1247,8 @@ private struct WaveformTrack: View {
 
 // MARK: - Merge preview page
 
-/// A clip chosen for merging — a sentence (text-only) or a blooper (video span).
+/// A clip chosen for merging — a transcript line or a blooper span. Both index
+/// into the same source recording, so both can be composited into the merge.
 private enum MergeClip: Identifiable {
     case sentence(LineScore)
     case blooper(BlooperSpan)
@@ -1260,27 +1262,61 @@ private enum MergeClip: Identifiable {
 
     var seconds: Double {
         switch self {
-        case .sentence(let c): return Double(estimatedSeconds(c.text))
+        case .sentence(let c):
+            if let s = c.start, let e = c.end, e > s { return e - s }
+            return Double(estimatedSeconds(c.text))
         case .blooper(let b): return b.duration
+        }
+    }
+
+    /// This clip's [start, end] range in the source video — nil for pasted lines
+    /// that carry no timecodes (nothing to cut).
+    var sourceRange: CMTimeRange? {
+        switch self {
+        case .sentence(let c):
+            guard let s = c.start, let e = c.end, e > s else { return nil }
+            return CMTimeRange(start: CMTime(seconds: s, preferredTimescale: 600),
+                               end: CMTime(seconds: e, preferredTimescale: 600))
+        case .blooper(let b):
+            return CMTimeRange(start: CMTime(seconds: b.start, preferredTimescale: 600),
+                               end: CMTime(seconds: b.end, preferredTimescale: 600))
+        }
+    }
+
+    /// The span to send to the backend `/merge` — nil for pasted lines with no
+    /// timecodes (nothing to cut).
+    var clipSpan: ClipSpan? {
+        switch self {
+        case .sentence(let c):
+            guard let s = c.start, let e = c.end, e > s else { return nil }
+            return ClipSpan(start: s, end: e, text: c.text)
+        case .blooper(let b):
+            return ClipSpan(start: b.start, end: b.end, text: "")
         }
     }
 }
 
-/// "Next page" after picking clips to merge: concatenates the marked blooper
-/// spans into one composition and plays it; sentence clips appear in the
-/// storyboard but have no footage to composite yet.
+/// "Next page" after picking clips to merge: concatenates the marked clips
+/// (transcript lines + blooper spans) into one composition, plays it, and can
+/// export the result to an .mp4 file.
 private struct MergePreviewView: View {
     let items: [MergeClip]
-    let videoURL: URL?
+    let videoURL: URL?                            // source recording the spans are cut from
+    let segments: [TranscriptSegment]            // word times → karaoke captions
     let onBack: () -> Void
 
     @State private var player = AVPlayer()
     @State private var hasVideo = false
     @State private var buildError: String?
+    @State private var isExporting = false
+    @State private var exportError: String?
+    @State private var exportNotice: String?
+    private let service = HighlightService()
 
     private var totalSeconds: Int { Int(items.reduce(0.0) { $0 + $1.seconds }.rounded()) }
-    private var sentenceCount: Int {
-        items.filter { if case .sentence = $0 { return true }; return false }.count
+    /// Selected lines with no timecodes — they can't be composited into the video.
+    private var textOnlyCount: Int {
+        items.filter { if case .sentence(let c) = $0 { return c.start == nil || c.end == nil }; return false }.count
     }
 
     var body: some View {
@@ -1294,6 +1330,20 @@ private struct MergePreviewView: View {
         }
         .onAppear(perform: build)
         .onDisappear { player.pause() }
+        .alert("Couldn’t export the video",
+               isPresented: Binding(get: { exportError != nil },
+                                    set: { if !$0 { exportError = nil } })) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
+        .alert("Short exported",
+               isPresented: Binding(get: { exportNotice != nil },
+                                    set: { if !$0 { exportNotice = nil } })) {
+            Button("OK", role: .cancel) { exportNotice = nil }
+        } message: {
+            Text(exportNotice ?? "")
+        }
     }
 
     private var topBar: some View {
@@ -1307,9 +1357,10 @@ private struct MergePreviewView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button { } label: { Label("Export", systemImage: "square.and.arrow.up") }
-                .disabled(true)
-                .help("Export the merged Short — coming next")
+            if isExporting { ProgressView().controlSize(.small) }
+            Button { exportMerged() } label: { Label("Export Short", systemImage: "square.and.arrow.up") }
+                .disabled(!hasVideo || isExporting || videoURL == nil)
+                .help("Render the merged clips as a 1080×1920 portrait Short with karaoke captions")
         }
         .padding()
     }
@@ -1322,8 +1373,8 @@ private struct MergePreviewView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .frame(maxWidth: .infinity, minHeight: 320)
                 .overlay(alignment: .bottomLeading) {
-                    if sentenceCount > 0 {
-                        Text("\(sentenceCount) text-only clip\(sentenceCount == 1 ? "" : "s") not shown — no footage yet")
+                    if textOnlyCount > 0 {
+                        Text("\(textOnlyCount) line\(textOnlyCount == 1 ? "" : "s") without timecodes not shown")
                             .font(.caption2).foregroundStyle(.white)
                             .padding(.horizontal, 8).padding(.vertical, 4)
                             .background(.black.opacity(0.55), in: Capsule())
@@ -1365,7 +1416,8 @@ private struct MergePreviewView: View {
         .background(Color(white: 0.12))
     }
 
-    /// Concatenate the marked blooper spans (video+audio) into one composition.
+    /// Concatenate the marked clips (transcript lines + blooper spans, video+audio)
+    /// into one composition, in the order they were arranged.
     private func build() {
         guard let videoURL else { return }
         let asset = AVURLAsset(url: videoURL)
@@ -1373,13 +1425,9 @@ private struct MergePreviewView: View {
         var cursor = CMTime.zero
         do {
             for item in items {
-                if case let .blooper(b) = item {
-                    let range = CMTimeRange(
-                        start: CMTime(seconds: b.start, preferredTimescale: 600),
-                        end: CMTime(seconds: b.end, preferredTimescale: 600))
-                    try comp.insertTimeRange(range, of: asset, at: cursor)
-                    cursor = cursor + range.duration
-                }
+                guard let range = item.sourceRange else { continue }
+                try comp.insertTimeRange(range, of: asset, at: cursor)
+                cursor = cursor + range.duration
             }
             if cursor > .zero {
                 player.replaceCurrentItem(with: AVPlayerItem(asset: comp))
@@ -1389,6 +1437,34 @@ private struct MergePreviewView: View {
             }
         } catch {
             buildError = "Couldn't build the merge: \(error.localizedDescription)"
+        }
+    }
+
+    /// Render the merged clips into one portrait (1080×1920) captioned Short via
+    /// the backend, then reveal the written file in Finder.
+    private func exportMerged() {
+        guard let videoURL else { return }
+        let spans = items.compactMap { $0.clipSpan }
+        guard !spans.isEmpty else {
+            exportError = "None of the selected clips have timecodes to cut."
+            return
+        }
+        isExporting = true
+        exportError = nil
+        exportNotice = nil
+        Task {
+            defer { isExporting = false }
+            do {
+                let result = try await service.mergeClips(
+                    videoPath: videoURL.path, clips: spans, segments: segments)
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.path)])
+                if result.subtitlesRequested && !result.subtitlesApplied {
+                    exportNotice = "Exported the portrait Short, but karaoke captions were skipped — "
+                        + "this ffmpeg has no subtitles support (install an ffmpeg built with libass)."
+                }
+            } catch {
+                exportError = error.localizedDescription
+            }
         }
     }
 }
@@ -1429,7 +1505,11 @@ private struct MergeCard: View {
     }
     private var subtitle: String {
         switch item {
-        case .sentence(let c): return c.text
+        case .sentence(let c):
+            if let s = c.start, let e = c.end, e > s {
+                return String(format: "%.1fs · %@", e - s, c.text)
+            }
+            return c.text
         case .blooper(let b): return String(format: "%.2fs · %@", b.duration, b.label)
         }
     }

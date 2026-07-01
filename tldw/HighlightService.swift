@@ -208,6 +208,45 @@ struct HighlightService {
         }
     }
 
+    /// Concatenate the given spans into one portrait+captioned Short on disk.
+    /// Pass `segments` (with word times) so the merged Short can be captioned.
+    func mergeClips(videoPath: String,
+                    clips: [ClipSpan],
+                    segments: [TranscriptSegment]? = nil,
+                    vertical: Bool = true,
+                    subtitles: Bool = true,
+                    name: String? = nil) async throws -> MergeResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("merge"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 900  // re-encoding + concatenating several spans can take a while
+
+        request.httpBody = try JSONEncoder().encode(
+            MergeRequest(videoPath: videoPath, clips: clips, name: name,
+                         vertical: vertical, subtitles: subtitles, segments: segments))
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw HighlightError.transport(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw HighlightError.transport("no HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            throw HighlightError.badStatus(http.statusCode, serverDetail(data))
+        }
+
+        do {
+            return try JSONDecoder().decode(MergeResponse.self, from: data)
+        } catch {
+            throw HighlightError.transport("could not decode merge response: \(error.localizedDescription)")
+        }
+    }
+
     /// Pull the human-readable `detail` field out of a FastAPI error body.
     private func serverDetail(_ data: Data) -> String {
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
