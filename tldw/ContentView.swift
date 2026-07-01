@@ -10,6 +10,7 @@
 import SwiftUI
 import AppKit
 import AVFoundation
+import AVKit
 
 struct ContentView: View {
     @State private var model = HighlightViewModel()
@@ -465,7 +466,26 @@ private struct EditorView: View {
     let onRemove: (Int) -> Void            // by line id
     let onMove: (Int, Int) -> Void         // (fromOffset, toOffset)
 
-    @State private var previewID: Int?
+    /// What the big preview is showing — a sentence clip (text) or a blooper (video).
+    private enum Selection: Hashable {
+        case sentence(Int)   // LineScore id
+        case blooper(Int)    // BlooperSpan id
+    }
+    @State private var selection: Selection?
+    @State private var marked: Set<Selection> = []   // clips ticked for merging
+    @State private var showMergePreview = false
+
+    // Detected blooper (dead-air) spans, surfaced into the same timeline sequence.
+    @State private var bloopers: [BlooperSpan] = []
+    @State private var blooperVideoURL: URL?
+    @State private var bigPlayer = AVPlayer()       // drives the top preview for blooper spans
+    @State private var bigEndObserver: Any?
+
+    /// The marked clips in timeline order (sentences first, then bloopers).
+    private var mergeItems: [MergeClip] {
+        clips.filter { marked.contains(.sentence($0.id)) }.map { MergeClip.sentence($0) }
+        + bloopers.filter { marked.contains(.blooper($0.id)) }.map { MergeClip.blooper($0) }
+    }
 
     // Background music beds are generated per clip, on demand, for the selected clip.
     @State private var bedByClip: [Int: BacksoundResponse] = [:]
@@ -474,8 +494,19 @@ private struct EditorView: View {
     @State private var player: AVAudioPlayer?
     private let service = HighlightService()
 
+    /// The sentence clip the preview/controls act on (nil while a blooper is selected).
     private var currentClip: LineScore? {
-        clips.first { $0.id == previewID } ?? clips.first
+        switch selection {
+        case .sentence(let id): return clips.first { $0.id == id }
+        case .blooper:          return nil
+        case nil:               return clips.first
+        }
+    }
+
+    /// The blooper span currently shown in the preview, if any.
+    private var currentBlooper: BlooperSpan? {
+        if case let .blooper(id) = selection { return bloopers.first { $0.id == id } }
+        return nil
     }
 
     private func generateBacksound(for clip: LineScore) {
@@ -504,11 +535,64 @@ private struct EditorView: View {
         }
     }
 
+    private func selectSentence(_ clip: LineScore) {
+        selection = .sentence(clip.id)
+        stopSpan()
+    }
+
+    /// Select a blooper clip and play its span in the big preview.
+    private func selectBlooper(_ span: BlooperSpan) {
+        selection = .blooper(span.id)
+        guard let item = bigPlayer.currentItem else { return }
+        stopSpan()
+        let start = CMTime(seconds: span.start, preferredTimescale: 600)
+        let end = CMTime(seconds: span.end, preferredTimescale: 600)
+        bigPlayer.pause()
+        item.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            bigPlayer.play()
+        }
+        bigEndObserver = bigPlayer.addBoundaryTimeObserver(
+            forTimes: [NSValue(time: end)], queue: .main
+        ) { [weak bigPlayer] in bigPlayer?.pause() }
+    }
+
+    private func stopSpan() {
+        bigPlayer.pause()
+        if let bigEndObserver { bigPlayer.removeTimeObserver(bigEndObserver); self.bigEndObserver = nil }
+    }
+
+    /// Receive detected spans (and their source video) from the panel.
+    private func receiveBloopers(_ spans: [BlooperSpan], _ url: URL?) {
+        bloopers = spans
+        blooperVideoURL = url
+        if let url { bigPlayer.replaceCurrentItem(with: AVPlayerItem(url: url)) }
+        // If the selected blooper vanished after a re-scan, fall back to a sentence.
+        if case let .blooper(id) = selection, !spans.contains(where: { $0.id == id }) {
+            selection = clips.first.map { .sentence($0.id) }
+            stopSpan()
+        }
+    }
+
+    /// Spoken length of the sentence clips (shown in the header).
     private var totalSeconds: Int {
         clips.reduce(0) { $0 + estimatedSeconds($1.text) }
     }
 
+    /// Full timeline length including the appended blooper spans (drives the ruler).
+    private var timelineSeconds: Int {
+        totalSeconds + Int(bloopers.reduce(0.0) { $0 + $1.duration }.rounded())
+    }
+
     var body: some View {
+        if showMergePreview {
+            MergePreviewView(items: mergeItems, videoURL: blooperVideoURL,
+                             onBack: { showMergePreview = false })
+        } else {
+            editorBody
+        }
+    }
+
+    private var editorBody: some View {
         VStack(spacing: 0) {
             topBar
             Divider()
@@ -519,8 +603,15 @@ private struct EditorView: View {
             Divider()
             strip
             Divider()
-            BlooperPanel()   // video input + dead-air spans, under the line sequence
+            // Detected spans flow up into the timeline above (same sequence).
+            BlooperPanel(onBloopers: receiveBloopers)
         }
+        .onAppear { if selection == nil, let f = clips.first { selection = .sentence(f.id) } }
+        .onDisappear { stopSpan() }
+    }
+
+    private func toggleMark(_ key: Selection) {
+        if marked.contains(key) { marked.remove(key) } else { marked.insert(key) }
     }
 
     private var topBar: some View {
@@ -541,7 +632,41 @@ private struct EditorView: View {
         .padding()
     }
 
+    @ViewBuilder
     private var previewArea: some View {
+        Group {
+            if let span = currentBlooper, blooperVideoURL != nil {
+                blooperPreview(span)
+            } else {
+                sentencePreview
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 320)
+    }
+
+    /// The blooper span playing in place from its source video.
+    private func blooperPreview(_ span: BlooperSpan) -> some View {
+        ZStack(alignment: .bottom) {
+            VideoPlayer(player: bigPlayer)
+                .background(Color.black)
+
+            HStack(spacing: 8) {
+                Image(systemName: "waveform.badge.exclamationmark")
+                Text("Blooper · \(span.label.replacingOccurrences(of: "_", with: " ")) · \(String(format: "%.2fs", span.duration))")
+                Spacer()
+                Button { selectBlooper(span) } label: { Label("Replay", systemImage: "arrow.clockwise") }
+                    .buttonStyle(.borderless)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.black.opacity(0.55))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    /// The text placeholder for a selected sentence clip (no real footage yet).
+    private var sentencePreview: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14)
                 .fill(Color(nsColor: .controlBackgroundColor))
@@ -567,7 +692,6 @@ private struct EditorView: View {
             }
             .padding(32)
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
     }
 
     /// Background-music controls for the selected clip — emotion-matched bed.
@@ -623,29 +747,61 @@ private struct EditorView: View {
     private func clipWidth(_ c: LineScore) -> CGFloat {
         max(90, CGFloat(estimatedSeconds(c.text)) * pxPerSec)
     }
+    private func bloopWidth(_ b: BlooperSpan) -> CGFloat {
+        max(54, CGFloat(b.duration) * pxPerSec)
+    }
     private var contentWidth: CGFloat {
-        clips.reduce(0) { $0 + clipWidth($1) } + CGFloat(max(0, clips.count - 1)) * 2
+        let sentences = clips.reduce(0) { $0 + clipWidth($1) }
+        let dead = bloopers.reduce(0) { $0 + bloopWidth($1) }
+        let count = clips.count + bloopers.count
+        return sentences + dead + CGFloat(max(0, count - 1)) * 2
     }
 
     private var strip: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(spacing: 10) {
                 Text("Timeline").font(.callout.weight(.semibold)).foregroundStyle(.white)
                 Spacer()
+                if !marked.isEmpty {
+                    Button { showMergePreview = true } label: {
+                        Label("Merge \(marked.count) clip\(marked.count == 1 ? "" : "s")",
+                              systemImage: "rectangle.stack.badge.play")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
                 selectedControls
             }
             .padding(.horizontal, 20).padding(.top, 12)
 
             ScrollView(.horizontal, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 6) {
-                    TimelineRuler(width: contentWidth, totalSeconds: totalSeconds, pxPerSec: pxPerSec)
+                    TimelineRuler(width: contentWidth, totalSeconds: timelineSeconds, pxPerSec: pxPerSec)
                     HStack(spacing: 2) {
                         ForEach(clips) { clip in
                             TimelineClip(clip: clip,
                                          width: clipWidth(clip),
-                                         isCurrent: clip.id == currentClip?.id,
-                                         onSelect: { previewID = clip.id },
+                                         isCurrent: selection == .sentence(clip.id),
+                                         isMarked: marked.contains(.sentence(clip.id)),
+                                         onSelect: { selectSentence(clip) },
+                                         onMark: { toggleMark(.sentence(clip.id)) },
                                          onRemove: { onRemove(clip.id) })
+                        }
+                        ForEach(bloopers) { span in
+                            BlooperTimelineClip(span: span,
+                                                width: bloopWidth(span),
+                                                isCurrent: selection == .blooper(span.id),
+                                                isMarked: marked.contains(.blooper(span.id)),
+                                                onSelect: { selectBlooper(span) },
+                                                onMark: { toggleMark(.blooper(span.id)) },
+                                                onRemove: {
+                                                    bloopers.removeAll { $0.id == span.id }
+                                                    marked.remove(.blooper(span.id))
+                                                    if selection == .blooper(span.id) {
+                                                        selection = clips.first.map { .sentence($0.id) }
+                                                        stopSpan()
+                                                    }
+                                                })
                         }
                     }
                     WaveformTrack(width: contentWidth)
@@ -678,7 +834,9 @@ private struct TimelineClip: View {
     let clip: LineScore
     let width: CGFloat
     let isCurrent: Bool
+    let isMarked: Bool
     let onSelect: () -> Void
+    let onMark: () -> Void
     let onRemove: () -> Void
 
     private var thumbCount: Int { max(1, Int(width / 26)) }
@@ -721,8 +879,92 @@ private struct TimelineClip: View {
             .padding(3)
             .help("Remove from timeline")
         }
+        .overlay(alignment: .topLeading) { MarkToggle(isMarked: isMarked, onMark: onMark) }
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
+    }
+}
+
+/// The merge-selection checkbox shown in a timeline clip's top-left corner.
+private struct MarkToggle: View {
+    let isMarked: Bool
+    let onMark: () -> Void
+
+    var body: some View {
+        Button { onMark() } label: {
+            Image(systemName: isMarked ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isMarked ? Color.blue : Color.white.opacity(0.8),
+                                 .black.opacity(0.5))
+        }
+        .buttonStyle(.plain)
+        .padding(3)
+        .help(isMarked ? "Marked for merge" : "Mark for merge")
+    }
+}
+
+/// A detected blooper (dead-air) span shown as a clip in the same timeline
+/// sequence. Width scales with its real duration; the title bar is red to mark
+/// it as dead air, distinct from the orange sentence clips.
+private struct BlooperTimelineClip: View {
+    let span: BlooperSpan
+    let width: CGFloat
+    let isCurrent: Bool
+    let isMarked: Bool
+    let onSelect: () -> Void
+    let onMark: () -> Void
+    let onRemove: () -> Void
+
+    private var labelText: String {
+        switch span.label {
+        case "silent": return "silent"
+        case "lips_moving": return "lips"
+        default: return "no face"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Dead-air band (no thumbnails — there's nothing being said here).
+            ZStack {
+                Rectangle().fill(Color.gray.opacity(0.22))
+                Image(systemName: "waveform.badge.exclamationmark")
+                    .font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+            }
+            .frame(height: 44)
+            .clipped()
+
+            // Title bar (red = dead air to trim).
+            VStack(alignment: .leading, spacing: 1) {
+                Text(String(format: "%.1fs", span.duration))
+                    .font(.system(size: 10, weight: .semibold))
+                Text(labelText)
+                    .font(.system(size: 8))
+                    .opacity(0.85)
+            }
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(.horizontal, 6).padding(.vertical, 4)
+            .background(Color.red.opacity(0.7))
+        }
+        .frame(width: width, height: 92)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .stroke(isCurrent ? Color.white : Color.white.opacity(0.15),
+                    lineWidth: isCurrent ? 2 : 1))
+        .overlay(alignment: .topTrailing) {
+            Button { onRemove() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.white, .black.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .padding(3)
+            .help("Remove this blooper from the timeline")
+        }
+        .overlay(alignment: .topLeading) { MarkToggle(isMarked: isMarked, onMark: onMark) }
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+        .help("Blooper: \(span.label) · \(String(format: "%.2fs", span.duration)) — click to preview")
     }
 }
 
@@ -768,6 +1010,197 @@ private struct WaveformTrack: View {
         .frame(width: width, height: 40, alignment: .leading)
         .padding(.horizontal, 4)
         .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+// MARK: - Merge preview page
+
+/// A clip chosen for merging — a sentence (text-only) or a blooper (video span).
+private enum MergeClip: Identifiable {
+    case sentence(LineScore)
+    case blooper(BlooperSpan)
+
+    var id: String {
+        switch self {
+        case .sentence(let c): return "s\(c.id)"
+        case .blooper(let b): return "b\(b.id)"
+        }
+    }
+
+    var seconds: Double {
+        switch self {
+        case .sentence(let c): return Double(estimatedSeconds(c.text))
+        case .blooper(let b): return b.duration
+        }
+    }
+}
+
+/// "Next page" after picking clips to merge: concatenates the marked blooper
+/// spans into one composition and plays it; sentence clips appear in the
+/// storyboard but have no footage to composite yet.
+private struct MergePreviewView: View {
+    let items: [MergeClip]
+    let videoURL: URL?
+    let onBack: () -> Void
+
+    @State private var player = AVPlayer()
+    @State private var hasVideo = false
+    @State private var buildError: String?
+
+    private var totalSeconds: Int { Int(items.reduce(0.0) { $0 + $1.seconds }.rounded()) }
+    private var sentenceCount: Int {
+        items.filter { if case .sentence = $0 { return true }; return false }.count
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            topBar
+            Divider()
+            preview.padding(24)
+            Spacer(minLength: 0)
+            Divider()
+            storyboard
+        }
+        .onAppear(perform: build)
+        .onDisappear { player.pause() }
+    }
+
+    private var topBar: some View {
+        HStack {
+            Button { onBack() } label: { Label("Back", systemImage: "chevron.left") }
+                .buttonStyle(.borderless)
+            Spacer()
+            VStack(spacing: 1) {
+                Text("Merged preview").font(.headline)
+                Text("\(items.count) clip\(items.count == 1 ? "" : "s") · total ≈ \(totalSeconds)s")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button { } label: { Label("Export", systemImage: "square.and.arrow.up") }
+                .disabled(true)
+                .help("Export the merged Short — coming next")
+        }
+        .padding()
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        if hasVideo {
+            VideoPlayer(player: player)
+                .background(Color.black)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .frame(maxWidth: .infinity, minHeight: 320)
+                .overlay(alignment: .bottomLeading) {
+                    if sentenceCount > 0 {
+                        Text("\(sentenceCount) text-only clip\(sentenceCount == 1 ? "" : "s") not shown — no footage yet")
+                            .font(.caption2).foregroundStyle(.white)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(.black.opacity(0.55), in: Capsule())
+                            .padding(10)
+                    }
+                }
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor))
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6]))
+                    .foregroundStyle(.quaternary)
+                VStack(spacing: 10) {
+                    Image(systemName: "rectangle.stack.badge.play")
+                        .font(.system(size: 46)).foregroundStyle(.secondary)
+                    Text(buildError ?? "Nothing to play — the merged clips are text-only (no footage yet).")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center).frame(maxWidth: 460)
+                }
+                .padding(32)
+            }
+            .frame(maxWidth: .infinity, minHeight: 320)
+        }
+    }
+
+    private var storyboard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sequence").font(.callout.weight(.semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 20).padding(.top, 12)
+            ScrollView(.horizontal, showsIndicators: true) {
+                HStack(spacing: 8) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+                        MergeCard(index: idx + 1, item: item)
+                    }
+                }
+                .padding(.horizontal, 20).padding(.bottom, 16)
+            }
+        }
+        .background(Color(white: 0.12))
+    }
+
+    /// Concatenate the marked blooper spans (video+audio) into one composition.
+    private func build() {
+        guard let videoURL else { return }
+        let asset = AVURLAsset(url: videoURL)
+        let comp = AVMutableComposition()
+        var cursor = CMTime.zero
+        do {
+            for item in items {
+                if case let .blooper(b) = item {
+                    let range = CMTimeRange(
+                        start: CMTime(seconds: b.start, preferredTimescale: 600),
+                        end: CMTime(seconds: b.end, preferredTimescale: 600))
+                    try comp.insertTimeRange(range, of: asset, at: cursor)
+                    cursor = cursor + range.duration
+                }
+            }
+            if cursor > .zero {
+                player.replaceCurrentItem(with: AVPlayerItem(asset: comp))
+                hasVideo = true
+                player.seek(to: .zero)
+                player.play()
+            }
+        } catch {
+            buildError = "Couldn't build the merge: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// One card in the merged-sequence storyboard.
+private struct MergeCard: View {
+    let index: Int
+    let item: MergeClip
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack {
+                Rectangle().fill(color.opacity(0.3))
+                Image(systemName: icon).font(.system(size: 16)).foregroundStyle(.white.opacity(0.7))
+            }
+            .frame(height: 50)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("#\(index) · \(title)").font(.system(size: 9, weight: .semibold))
+                Text(subtitle).font(.system(size: 8)).opacity(0.85)
+            }
+            .foregroundStyle(.white).lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 6).padding(.vertical, 4)
+            .background(color)
+        }
+        .frame(width: 130, height: 92)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var color: Color {
+        if case .blooper = item { return .red.opacity(0.7) } else { return .orange.opacity(0.92) }
+    }
+    private var icon: String {
+        if case .blooper = item { return "waveform.badge.exclamationmark" } else { return "text.alignleft" }
+    }
+    private var title: String {
+        if case .blooper = item { return "blooper" } else { return "clip" }
+    }
+    private var subtitle: String {
+        switch item {
+        case .sentence(let c): return c.text
+        case .blooper(let b): return String(format: "%.2fs · %@", b.duration, b.label)
+        }
     }
 }
 

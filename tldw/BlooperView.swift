@@ -2,11 +2,11 @@
 //  BlooperView.swift
 //  tldw — Blooper (non-speech) detector
 //
-//  An inline panel docked under the editor's timeline. Pick a source video, find
-//  every span where nobody is talking (silence, pauses, dead air), and preview
-//  each one by seeking the source video. Detection runs in the Python backend
-//  (Silero VAD + an optional OpenCV lip check); this panel never reads cut clips
-//  — it scrubs the original file in place.
+//  An inline panel docked under the editor's timeline. Pick a source video
+//  (drag-and-drop or browse); detection runs in the Python backend (Silero VAD +
+//  an optional OpenCV lip check) and the detected non-speech spans are reported
+//  up to the editor, which drops them onto the timeline. Previewing a span
+//  happens in the editor's big preview, so this panel has no player of its own.
 //
 //  For now the video is chosen explicitly here; eventually it should default to
 //  the source of the selected clip on the timeline.
@@ -14,20 +14,19 @@
 
 import SwiftUI
 import AppKit
-import AVKit
 import UniformTypeIdentifiers
 
 struct BlooperPanel: View {
+    /// Reports the detected spans + their source video up to the editor.
+    var onBloopers: ([BlooperSpan], URL?) -> Void = { _, _ in }
+
     @State private var videoURL: URL?
     @State private var response: BlooperResponse?
     @State private var isLoading = false
     @State private var statusMessage = ""
     @State private var errorMessage: String?
     @State private var useLipCheck = true
-
-    @State private var player = AVPlayer()
-    @State private var playingID: Int?
-    @State private var endObserver: Any?
+    @State private var isDropTargeted = false
 
     private let service = HighlightService()
 
@@ -39,7 +38,6 @@ struct BlooperPanel: View {
         .padding(.horizontal, 20).padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
-        .onDisappear { teardownPlayer() }
     }
 
     // MARK: - Header (title + video input)
@@ -62,10 +60,7 @@ struct BlooperPanel: View {
 
             if isLoading {
                 ProgressView().controlSize(.small)
-            } else if videoURL == nil {
-                Button { pickVideo() } label: { Label("Choose video…", systemImage: "film") }
-                    .buttonStyle(.borderedProminent)
-            } else {
+            } else if videoURL != nil {
                 Button { runDetection() } label: { Label("Re-scan", systemImage: "arrow.clockwise") }
                     .buttonStyle(.bordered)
                 Button { pickVideo() } label: { Label("Change", systemImage: "film") }
@@ -81,7 +76,7 @@ struct BlooperPanel: View {
         return "Scan a source video for non-speech / dead-air spans"
     }
 
-    // MARK: - Content (player + span list)
+    // MARK: - Content (drop zone / status)
 
     @ViewBuilder
     private var content: some View {
@@ -90,36 +85,44 @@ struct BlooperPanel: View {
                 ProgressView().controlSize(.small)
                 Text(statusMessage).font(.caption).foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
-        } else if let response, videoURL != nil {
-            HStack(alignment: .top, spacing: 14) {
-                VideoPlayer(player: player)
-                    .frame(width: 300, height: 168)
-                    .background(Color.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                if response.bloopers.isEmpty {
-                    Text("No non-speech spans — someone's talking the whole way through.")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 168, alignment: .center)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 6) {
-                            ForEach(response.bloopers) { span in
-                                BlooperRow(span: span,
-                                           isPlaying: playingID == span.id,
-                                           onPlay: { play(span: span) })
-                            }
-                        }
-                    }
-                    .frame(height: 168)
-                }
-            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         } else if videoURL == nil {
-            Text("Pick a video to find the dead air in it. Each span plays in place — no clips are exported.")
-                .font(.caption).foregroundStyle(.tertiary)
+            dropZone
+        } else if let response {
+            Label(response.bloopers.isEmpty
+                  ? "No non-speech spans — someone's talking the whole way through."
+                  : "Added \(response.count) clip\(response.count == 1 ? "" : "s") to the timeline — click a red one to preview it above.",
+                  systemImage: response.bloopers.isEmpty ? "checkmark.circle" : "arrow.up")
+                .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
         }
+    }
+
+    /// Drag-and-drop target for a source video (also click-to-browse).
+    private var dropZone: some View {
+        Button { pickVideo() } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6]))
+                    .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.45))
+                VStack(spacing: 6) {
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 28))
+                        .foregroundStyle(isDropTargeted ? Color.accentColor : .secondary)
+                    Text(isDropTargeted ? "Drop to scan" : "Drag a video here")
+                        .font(.callout.weight(.medium))
+                    Text("or click to browse — spans land on the timeline, no clips exported")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity).frame(height: 120)
+            .background(isDropTargeted ? Color.accentColor.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .dropDestination(for: URL.self) { urls, _ in handleDrop(urls) }
+            isTargeted: { isDropTargeted = $0 }
     }
 
     // MARK: - Video picking + detection
@@ -131,8 +134,28 @@ struct BlooperPanel: View {
         panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie]
         panel.message = "Choose a source video to scan for bloopers."
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        load(url)
+    }
+
+    /// Accept a dropped file, ignoring anything that isn't a video.
+    private func handleDrop(_ urls: [URL]) -> Bool {
+        guard let url = urls.first(where: isVideo) else { return false }
+        load(url)
+        return true
+    }
+
+    private func isVideo(_ url: URL) -> Bool {
+        if let type = UTType(filenameExtension: url.pathExtension) {
+            return type.conforms(to: .audiovisualContent) || type.conforms(to: .movie)
+        }
+        return ["mov", "mp4", "m4v", "avi", "mkv", "webm"].contains(url.pathExtension.lowercased())
+    }
+
+    private func load(_ url: URL) {
+        // Dropped files come with a sandbox extension; hold it open so the editor's
+        // AVPlayer can keep reading (no-op for NSOpenPanel URLs, already granted).
+        _ = url.startAccessingSecurityScopedResource()
         videoURL = url
-        loadPlayer(url: url)
         runDetection()
     }
 
@@ -144,107 +167,16 @@ struct BlooperPanel: View {
         Task {
             defer { isLoading = false }
             do {
-                response = try await service.detectBloopers(
+                let result = try await service.detectBloopers(
                     videoPath: url.path, useLipCheck: useLipCheck)
+                response = result
                 errorMessage = nil
+                onBloopers(result.bloopers, url)   // push spans + source into the editor timeline
             } catch {
                 response = nil
                 errorMessage = error.localizedDescription
+                onBloopers([], nil)
             }
         }
     }
-
-    // MARK: - Player
-
-    private func loadPlayer(url: URL) {
-        teardownPlayer()
-        player.replaceCurrentItem(with: AVPlayerItem(url: url))
-        playingID = nil
-    }
-
-    /// Seek to the span's start and play, stopping at its end.
-    private func play(span: BlooperSpan) {
-        guard let item = player.currentItem else { return }
-        if let endObserver { player.removeTimeObserver(endObserver); self.endObserver = nil }
-
-        let start = CMTime(seconds: span.start, preferredTimescale: 600)
-        let end = CMTime(seconds: span.end, preferredTimescale: 600)
-        playingID = span.id
-
-        player.pause()
-        item.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-            player.play()
-        }
-
-        // Pause the moment playback crosses the span's end.
-        endObserver = player.addBoundaryTimeObserver(
-            forTimes: [NSValue(time: end)], queue: .main
-        ) { [weak player] in
-            player?.pause()
-            if playingID == span.id { playingID = nil }
-        }
-    }
-
-    private func teardownPlayer() {
-        player.pause()
-        if let endObserver { player.removeTimeObserver(endObserver); self.endObserver = nil }
-        playingID = nil
-    }
-}
-
-// MARK: - One blooper span row
-
-private struct BlooperRow: View {
-    let span: BlooperSpan
-    let isPlaying: Bool
-    let onPlay: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: onPlay) {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 26))
-                    .foregroundStyle(isPlaying ? Color.orange : Color.accentColor)
-            }
-            .buttonStyle(.plain)
-            .help("Play this span from the source video")
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(timecode(span.start)) – \(timecode(span.end))")
-                    .font(.callout.weight(.semibold).monospacedDigit())
-                Text(String(format: "%.2fs of dead air", span.duration))
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-
-            Spacer()
-            labelBadge
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color(nsColor: .windowBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8)
-            .stroke(isPlaying ? Color.orange : Color.clear, lineWidth: 1.5))
-    }
-
-    private var labelBadge: some View {
-        let (text, color, icon): (String, Color, String) = {
-            switch span.label {
-            case "silent":      return ("silent", .green, "speaker.slash.fill")
-            case "lips_moving": return ("lips moving", .orange, "mouth.fill")
-            default:            return ("no face", .secondary, "person.fill.questionmark")
-            }
-        }()
-        return Label(text, systemImage: icon)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(color)
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(color.opacity(0.14), in: Capsule())
-    }
-}
-
-/// Seconds → `M:SS` (or `M:SS.t` under a minute) timecode.
-private func timecode(_ seconds: Double) -> String {
-    let m = Int(seconds) / 60
-    let s = seconds - Double(m * 60)
-    return m > 0 ? String(format: "%d:%05.2f", m, s) : String(format: "0:%05.2f", s)
 }

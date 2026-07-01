@@ -25,7 +25,8 @@ flowchart TD
     D --> E["invert speech → non-speech spans<br/>interval math (merge · pad)"]
     E --> F["lip-motion check (OpenCV)<br/>Haar face → mouth frame-diff"]
     F --> G["spans + labels → JSON"]
-    G --> H["Swift: AVPlayer seeks source<br/>start → boundary observer pauses at end"]
+    G --> H["spans land on the editor timeline<br/>(red BlooperTimelineClips)"]
+    H --> I["click a clip → big preview<br/>AVPlayer seeks span, pauses at end"]
 ```
 
 ## Stage-by-stage
@@ -34,7 +35,7 @@ flowchart TD
 
 | Where | What happens |
 |---|---|
-| `ContentView.swift` · `EditorView` | `BlooperPanel()` is docked inline under the timeline strip. |
+| `ContentView.swift` · `EditorView` | `BlooperPanel(onBloopers:)` is docked under the timeline; detected spans + their source video flow back up. Spans render as red dead-air clips in the same timeline sequence as the orange sentence clips (`BlooperTimelineClip`); clicking one plays it in the big top preview. Each clip has a merge checkbox — marking clips and tapping **Merge** opens `MergePreviewView`, which concatenates the marked blooper spans into one `AVMutableComposition` and plays it. |
 | `BlooperView.swift` · `pickVideo()` | `NSOpenPanel` (movie types) returns a security-scoped URL; the app already holds `files.user-selected.read-only`. |
 | `HighlightService.swift` · `detectBloopers()` | POSTs `{ video_path, use_lip_check }` to `http://127.0.0.1:8000/bloopers`. 600 s timeout — the first call downloads Silero VAD and decodes the whole video. |
 | `server.py` · `bloopers()` | Validates the path, lazily imports the PoC module, runs `detect()`, returns span metadata. |
@@ -79,18 +80,21 @@ frame-to-frame difference** of a normalised grayscale crop:
 > MediaPipe was dropped — its wheels are unreliable on macOS-arm64. The Haar
 > cascade ships with `opencv-python` and works wherever `cv2` imports.
 
-### 5. Preview — seek the source in place
+### 5. Preview — seek the source in the big editor preview
 
-The app holds a single `AVPlayer` on the source video. Playing a span:
+`EditorView` owns one `AVPlayer` (`bigPlayer`) loaded with the source video the
+panel reported. Clicking a blooper clip on the timeline selects it and plays its
+span in the big top preview:
 
 ```swift
-item.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero) { _ in player.play() }
-player.addBoundaryTimeObserver(forTimes: [NSValue(time: end)], queue: .main) { player.pause() }
+item.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero) { _ in bigPlayer.play() }
+bigPlayer.addBoundaryTimeObserver(forTimes: [NSValue(time: end)], queue: .main) { bigPlayer.pause() }
 ```
 
 Frame-accurate seek to the span's start, then a boundary-time observer pauses the
-moment playback crosses the end. No clip files, no base64 — just scrubbing the
-original.
+moment playback crosses the end. The same preview shows sentence clips as text
+(no real footage yet) and blooper clips as video — a single selection drives both.
+No clip files, no base64 — just scrubbing the original.
 
 ## API contract
 
@@ -136,8 +140,10 @@ on disk, **500** if ffmpeg / VAD / decoding fails (the reason is included).
 
 - **Video is picked manually** — the panel should default to the source video of
   the selected clip on the timeline, instead of a separate `NSOpenPanel`.
-- **No clip export** — the app previews in place; wiring `cut_clips()` back in
-  would let the editor pull blooper spans onto the timeline.
+- **Timeline clips are markers, not media** — blooper spans now sit in the
+  timeline sequence (`BlooperTimelineClip`) and are removable, but they're
+  positional markers; wiring `cut_clips()` (or in-place seeks) would let them
+  render/export as real footage alongside the sentence clips.
 - **Whole-video decode per scan** — toggling the lip check re-runs the whole VAD
   pass; caching speech timestamps per file would make a re-scan instant.
 - **Single-face lip check** — only the largest face is tracked; multi-speaker
