@@ -21,6 +21,9 @@ final class HighlightViewModel {
     var serverReachable: Bool?
     /// The recording this transcript came from — the editor cuts clips from it.
     var sourceVideoURL: URL?
+    /// Timestamped transcript segments (with per-word times) — forwarded to the
+    /// clip export so cuts can be captioned with karaoke subtitles.
+    var transcriptSegments: [TranscriptSegment] = []
 
     private let service = HighlightService()
 
@@ -55,6 +58,7 @@ final class HighlightViewModel {
             transcript = text
             transcriptText = text
             segments = response.segments
+            transcriptSegments = response.segments   // forwarded to clip export for captions
             sourceVideoURL = url   // the editor cuts clips from this recording
         } catch {
             statusMessage = error.localizedDescription
@@ -85,6 +89,7 @@ final class HighlightViewModel {
     func reset() {
         transcriptText = ""
         sourceVideoURL = nil
+        transcriptSegments = []
         clearResults()
         statusMessage = "Drop in a recording to generate Shorts."
     }

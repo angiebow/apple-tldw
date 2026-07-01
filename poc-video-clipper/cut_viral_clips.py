@@ -13,6 +13,7 @@ import os
 import sys
 import json
 import subprocess
+import tempfile
 from pathlib import Path
 
 def cut_category(video_path: str, clean_audio_path: str, clips_data: list, category_name: str, base_output_dir: str):
@@ -114,9 +115,66 @@ def cut_all_rankings(video_path: str, json_path: str, clean_audio_path: str = No
             
     print("\n🎉 Semua proses pemotongan klip selesai dengan sukses!")
 
+_SUBS_CACHE = {}
+
+
+def ffmpeg_has_subtitles() -> bool:
+    """Whether this ffmpeg build has the libass ``subtitles`` filter (needed to
+    burn in the karaoke captions). Homebrew builds without libass lack it, in
+    which case we render the vertical video *without* subtitles rather than fail."""
+    if "ok" not in _SUBS_CACHE:
+        try:
+            out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
+                                 capture_output=True, text=True, check=False).stdout
+            _SUBS_CACHE["ok"] = any(
+                len(t := line.split()) >= 2 and t[1] == "subtitles"
+                for line in out.splitlines())
+        except Exception:
+            _SUBS_CACHE["ok"] = False
+    return _SUBS_CACHE["ok"]
+
+
+def _safe_name(text: str) -> str:
+    """Filesystem-safe clip name from the first few words of the line."""
+    clean = "".join(c if c.isalnum() or c in " _-" else "" for c in (text or "")[:30]).strip()
+    return clean.replace(" ", "_") or "clip"
+
+
+def _render(video_path: str, clean_audio_path, start: float, duration: float,
+            output_path: str, vertical: bool, ass_path=None) -> None:
+    """Re-encode one span. Vertical → 1080×1920 portrait with a blurred fill
+    background; ass_path (if given) burns the karaoke subtitles on top."""
+    use_clean = bool(clean_audio_path) and os.path.exists(clean_audio_path)
+
+    cmd = ["ffmpeg", "-y", "-ss", str(start), "-i", video_path]
+    if use_clean:
+        cmd += ["-ss", str(start), "-i", clean_audio_path]
+    cmd += ["-t", str(duration)]
+
+    if vertical:
+        # Blurred, stretched copy as the 9:16 background; the original scaled to
+        # width sits centred on top; optional subtitles burned over the canvas.
+        graph = ("[0:v]scale=1080:1920,boxblur=20:10[bg];"
+                 "[0:v]scale=1080:-1[fg];"
+                 "[bg][fg]overlay=(W-w)/2:(H-h)/2")
+        if ass_path:
+            esc = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+            graph += f",subtitles='{esc}'"
+        graph += ",scale=1080:1920[outv]"
+        cmd += ["-filter_complex", graph, "-map", "[outv]",
+                "-map", "1:a" if use_clean else "0:a",
+                "-c:v", "libx264", "-c:a", "aac", "-s", "1080x1920", output_path]
+    else:
+        cmd += ["-map", "0:v", "-map", "1:a"] if use_clean else []
+        cmd += ["-c:v", "libx264", "-c:a", "aac", output_path]
+
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
 def cut_clips(video_path: str, clips: list, output_dir: str,
-              clean_audio_path: str = None) -> list:
-    """Cut each ``{start, end, text}`` clip out of *video_path* into *output_dir*.
+              clean_audio_path: str = None,
+              vertical: bool = True, subtitles: bool = True) -> list:
+    """Cut each ``{start, end, text[, words]}`` clip out of *video_path* into *output_dir*.
 
     Library entry point used by the tldw backend's ``POST /clip`` endpoint. Unlike
     :func:`cut_all_rankings` (which reads a rankings JSON and writes per-category
@@ -126,10 +184,15 @@ def cut_clips(video_path: str, clips: list, output_dir: str,
 
     Parameters:
         video_path:       Absolute path to the source video.
-        clips:            List of dicts with ``start`` / ``end`` (seconds) and ``text``.
+        clips:            Dicts with ``start`` / ``end`` (s) and ``text``; optional
+                          ``words`` (``[{word,start,end}]``, source timeline) drive
+                          the karaoke subtitles.
         output_dir:       Directory to write the ``.mp4`` files into (created if needed).
-        clean_audio_path: Optional preprocessed WAV to mux in place of the source
-                          audio; falls back to the video's own audio when absent.
+        clean_audio_path: Optional preprocessed WAV to mux in place of the source audio.
+        vertical:         Render 1080×1920 portrait (blurred fill background) for Shorts.
+        subtitles:        Burn word-by-word karaoke captions — only if this ffmpeg
+                          has the libass ``subtitles`` filter (see
+                          :func:`ffmpeg_has_subtitles`); silently skipped otherwise.
 
     Returns:
         List of absolute paths to the clips that were written, in input order.
@@ -142,42 +205,35 @@ def cut_clips(video_path: str, clips: list, output_dir: str,
         raise FileNotFoundError(f"Source video not found: {video_path}")
 
     os.makedirs(output_dir, exist_ok=True)
-    use_clean_audio = bool(clean_audio_path) and os.path.exists(clean_audio_path)
+    burn_subs = bool(subtitles) and ffmpeg_has_subtitles()
+    if burn_subs:
+        import subtitle_generator  # sibling module; POC dir is on sys.path
 
     written = []
-    for idx, clip in enumerate(clips, 1):
-        start = float(clip["start"])
-        end = float(clip["end"])
-        duration = round(end - start, 2)
-        if duration <= 0:
-            continue
+    with tempfile.TemporaryDirectory(prefix="tldw_ass_") as ass_dir:
+        for idx, clip in enumerate(clips, 1):
+            start = float(clip["start"])
+            end = float(clip["end"])
+            duration = round(end - start, 2)
+            if duration <= 0:
+                continue
 
-        # Filesystem-safe name from the first few words of the line.
-        clean_text = "".join(c if c.isalnum() or c in " _-" else "" for c in clip.get("text", "")[:30]).strip()
-        clean_text = clean_text.replace(" ", "_") or "clip"
-        output_path = os.path.join(output_dir, f"clip_{idx:02d}_{start:.1f}s_{clean_text}.mp4")
+            output_path = os.path.join(
+                output_dir, f"clip_{idx:02d}_{start:.1f}s_{_safe_name(clip.get('text', ''))}.mp4")
 
-        if use_clean_audio:
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", str(start), "-i", video_path,
-                "-ss", str(start), "-i", clean_audio_path,
-                "-t", str(duration),
-                "-map", "0:v", "-map", "1:a",
-                "-c:v", "libx264", "-c:a", "aac",
-                output_path,
-            ]
-        else:
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", str(start), "-i", video_path,
-                "-t", str(duration),
-                "-c:v", "libx264", "-c:a", "aac",
-                output_path,
-            ]
+            ass_path = None
+            if burn_subs:
+                ass_path = os.path.join(ass_dir, f"clip_{idx:02d}.ass")
+                sentences_data = [{"start": start, "end": end,
+                                   "text": clip.get("text", ""),
+                                   "words": clip.get("words") or []}]
+                # emoji="" → no Llama; generate_ass_file falls back to even word
+                # timing when a clip carries no word-level timestamps.
+                subtitle_generator.generate_ass_file(start, end, sentences_data, "", ass_path)
 
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        written.append(os.path.abspath(output_path))
+            _render(video_path, clean_audio_path, start, duration,
+                    output_path, vertical=vertical, ass_path=ass_path)
+            written.append(os.path.abspath(output_path))
 
     return written
 

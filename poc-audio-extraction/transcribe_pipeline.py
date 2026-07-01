@@ -138,13 +138,15 @@ def transcribe(input_path: str, model_name: str = "base") -> Dict[str, Any]:
             if len(chunk) < _MIN_SLICE_SAMPLES:
                 continue
 
+            # word_timestamps=True gives per-word times, which drive the karaoke
+            # (word-by-word) subtitles burned into exported clips.
             try:
-                res = model.transcribe(chunk, fp16=False)
+                res = model.transcribe(chunk, fp16=False, word_timestamps=True)
             except (NotImplementedError, RuntimeError):
                 # Accelerator choked mid-run — drop to CPU and retry this slice.
                 if device != "cpu":
                     model, device = _load_whisper(model_name, "cpu")
-                    res = model.transcribe(chunk, fp16=False)
+                    res = model.transcribe(chunk, fp16=False, word_timestamps=True)
                 else:
                     raise
 
@@ -154,11 +156,18 @@ def transcribe(input_path: str, model_name: str = "base") -> Dict[str, Any]:
                 text = s["text"].strip()
                 if not text:
                     continue
+                words = [
+                    {"word": w["word"].strip(),
+                     "start": round(seg.start + w["start"], 3),
+                     "end": round(seg.start + w["end"], 3)}
+                    for w in s.get("words", []) if w.get("word", "").strip()
+                ]
                 out_segments.append({
                     "id": seg_id,
                     "start": round(seg.start + s["start"], 3),
                     "end": round(seg.start + s["end"], 3),
                     "text": text,
+                    "words": words,
                 })
                 seg_id += 1
                 texts.append(text)

@@ -169,8 +169,13 @@ struct HighlightService {
     }
 
     /// Cut the given spans out of the source video into .mp4 files on disk.
+    /// Defaults to portrait Shorts with karaoke captions; pass `segments` (with
+    /// word times) so each clip can be captioned.
     func exportClips(videoPath: String,
                      clips: [ClipSpan],
+                     segments: [TranscriptSegment]? = nil,
+                     vertical: Bool = true,
+                     subtitles: Bool = true,
                      name: String? = nil) async throws -> ClipResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("clip"))
         request.httpMethod = "POST"
@@ -178,7 +183,8 @@ struct HighlightService {
         request.timeoutInterval = 900  // re-encoding several spans can take a while
 
         request.httpBody = try JSONEncoder().encode(
-            ClipRequest(videoPath: videoPath, clips: clips, name: name))
+            ClipRequest(videoPath: videoPath, clips: clips, name: name,
+                        vertical: vertical, subtitles: subtitles, segments: segments))
 
         let data: Data
         let response: URLResponse

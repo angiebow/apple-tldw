@@ -142,12 +142,21 @@ struct TranscribeRequest: Codable {
     }
 }
 
+/// One word with its timestamp — drives the karaoke (word-by-word) subtitles.
+struct TranscriptWord: Codable {
+    let word: String
+    let start: Double
+    let end: Double
+}
+
 /// One transcribed span, timestamped on the source timeline.
 struct TranscriptSegment: Codable, Identifiable {
     let id: Int
     let start: Double
     let end: Double
     let text: String
+    /// Per-word timings (present when the backend has word timestamps on).
+    let words: [TranscriptWord]?
 }
 
 /// Response body for `POST /transcribe`.
@@ -183,9 +192,14 @@ struct ClipRequest: Codable {
     let clips: [ClipSpan]
     /// Output subfolder name; nil lets the backend use the source file's stem.
     let name: String?
+    /// Render 1080×1920 portrait Shorts, and burn karaoke captions (libass permitting).
+    let vertical: Bool
+    let subtitles: Bool
+    /// Full transcript segments (with per-word times) used to caption each clip.
+    let segments: [TranscriptSegment]?
 
     enum CodingKeys: String, CodingKey {
-        case clips, name
+        case clips, name, vertical, subtitles, segments
         case videoPath = "video_path"
     }
 }
@@ -208,11 +222,17 @@ struct ClipResponse: Codable {
     /// Folder the clips were written into.
     let outputDir: String
     let count: Int
+    /// Whether the clips were rendered portrait, and whether captions were burned.
+    let vertical: Bool
+    let subtitlesApplied: Bool
+    let subtitlesRequested: Bool
     let clips: [ClipInfo]
 
     enum CodingKeys: String, CodingKey {
-        case source, count, clips
+        case source, count, clips, vertical
         case outputDir = "output_dir"
+        case subtitlesApplied = "subtitles_applied"
+        case subtitlesRequested = "subtitles_requested"
     }
 }
 

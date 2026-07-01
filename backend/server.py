@@ -430,10 +430,17 @@ def _load_clipper():
 app = FastAPI(title="tldw highlighter")
 
 
+class WordIn(BaseModel):
+    word: str
+    start: float
+    end: float
+
+
 class TranscriptSegmentIn(BaseModel):
     text: str
     start: float
     end: float
+    words: Optional[list[WordIn]] = None   # per-word times → karaoke subtitles
 
 
 class HighlightRequest(BaseModel):
@@ -470,6 +477,11 @@ class ClipRequest(BaseModel):
     video_path: str                       # absolute path to the source video (local)
     clips: list[ClipSpan]                 # spans to cut, in order
     name: Optional[str] = None            # output subfolder name (defaults to the source stem)
+    vertical: bool = True                 # render 1080×1920 portrait Shorts
+    subtitles: bool = True                # burn karaoke captions (needs ffmpeg libass)
+    # Full transcript segments with per-word times; the endpoint slices the words
+    # falling inside each clip span to caption it. Optional (no words → no captions).
+    segments: Optional[list[TranscriptSegmentIn]] = None
 
 
 @app.get("/health")
@@ -652,7 +664,15 @@ def clip(req: ClipRequest):
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=400, detail=f"Source video not found: {req.video_path}")
 
-    spans = [{"start": c.start, "end": c.end, "text": c.text}
+    # Flatten all transcript words; each clip is captioned with the words that
+    # overlap its span (source timeline).
+    all_words = [{"word": w.word, "start": w.start, "end": w.end}
+                 for seg in (req.segments or []) for w in (seg.words or [])]
+
+    def words_in(a: float, b: float) -> list:
+        return [w for w in all_words if w["start"] < b and w["end"] > a]
+
+    spans = [{"start": c.start, "end": c.end, "text": c.text, "words": words_in(c.start, c.end)}
              for c in req.clips if c.end > c.start]
     if not spans:
         raise HTTPException(status_code=400, detail="No valid clip spans to cut.")
@@ -662,8 +682,10 @@ def clip(req: ClipRequest):
     out_dir = os.path.join(CLIPS_OUT_DIR, name)
 
     mod = _load_clipper()
+    subtitles_applied = req.subtitles and mod.ffmpeg_has_subtitles()
     try:
-        written = mod.cut_clips(path, spans, out_dir)
+        written = mod.cut_clips(path, spans, out_dir,
+                                vertical=req.vertical, subtitles=req.subtitles)
     except Exception as exc:  # ffmpeg failure / bad path → 500 with the reason
         detail = getattr(exc, "stderr", None) or str(exc)
         if isinstance(detail, bytes):
@@ -674,6 +696,10 @@ def clip(req: ClipRequest):
         "source": os.path.basename(path),
         "output_dir": out_dir,
         "count": len(written),
+        "vertical": req.vertical,
+        # True only if captions were actually burned (requested AND ffmpeg has libass).
+        "subtitles_applied": subtitles_applied,
+        "subtitles_requested": req.subtitles,
         "clips": [
             {"index": i, "path": p, "start": s["start"], "end": s["end"], "text": s["text"]}
             for i, (p, s) in enumerate(zip(written, spans))

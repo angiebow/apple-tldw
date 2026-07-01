@@ -63,6 +63,7 @@ struct ContentView: View {
                     EditorView(
                         clips: selectedClips,
                         sourceVideoURL: model.sourceVideoURL,
+                        transcriptSegments: model.transcriptSegments,
                         onBack: { showEditor = false },
                         onRemove: { id in toggleSelection(id, false) },
                         onMove: { from, to in selectedOrder.move(fromOffsets: IndexSet(integer: from), toOffset: to) }
@@ -520,6 +521,7 @@ private struct ShortDetailView: View {
 private struct EditorView: View {
     let clips: [LineScore]                 // selected lines, in arranged order
     let sourceVideoURL: URL?               // the recording clips are cut from
+    let transcriptSegments: [TranscriptSegment]  // word times → karaoke captions
     let onBack: () -> Void
     let onRemove: (Int) -> Void            // by line id
     let onMove: (Int, Int) -> Void         // (fromOffset, toOffset)
@@ -527,6 +529,7 @@ private struct EditorView: View {
     // Export state: cut the selected spans to .mp4 files via the backend.
     @State private var isExporting = false
     @State private var exportError: String?
+    @State private var exportNotice: String?
 
     /// What the big preview is showing — a sentence clip (text) or a blooper (video).
     private enum Selection: Hashable {
@@ -678,6 +681,13 @@ private struct EditorView: View {
         } message: {
             Text(exportError ?? "")
         }
+        .alert("Clips exported",
+               isPresented: Binding(get: { exportNotice != nil },
+                                    set: { if !$0 { exportNotice = nil } })) {
+            Button("OK", role: .cancel) { exportNotice = nil }
+        } message: {
+            Text(exportNotice ?? "")
+        }
     }
 
     private func toggleMark(_ key: Selection) {
@@ -727,17 +737,22 @@ private struct EditorView: View {
         }
         isExporting = true
         exportError = nil
+        exportNotice = nil
         Task {
             defer { isExporting = false }
             do {
-                let result = try await service.exportClips(videoPath: url.path, clips: spans)
+                // Portrait Shorts + karaoke captions; forward transcript word times.
+                let result = try await service.exportClips(
+                    videoPath: url.path, clips: spans, segments: transcriptSegments)
                 // Reveal the written files (or the folder) in Finder.
                 let urls = result.clips.map { URL(fileURLWithPath: $0.path) }
-                if urls.isEmpty {
-                    NSWorkspace.shared.activateFileViewerSelecting(
-                        [URL(fileURLWithPath: result.outputDir)])
-                } else {
-                    NSWorkspace.shared.activateFileViewerSelecting(urls)
+                NSWorkspace.shared.activateFileViewerSelecting(
+                    urls.isEmpty ? [URL(fileURLWithPath: result.outputDir)] : urls)
+                // Captions were asked for but this ffmpeg can't burn them (no libass).
+                if result.subtitlesRequested && !result.subtitlesApplied {
+                    exportNotice = "Exported \(result.count) portrait clip\(result.count == 1 ? "" : "s"), "
+                        + "but captions were skipped — this ffmpeg has no subtitles support "
+                        + "(install an ffmpeg built with libass to burn karaoke subtitles)."
                 }
             } catch {
                 exportError = error.localizedDescription

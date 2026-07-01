@@ -125,19 +125,26 @@ on disk, **500** if ffmpeg / preprocessing / Whisper fails (the reason is includ
 | Denoising | **DeepFilterNet** (`deepfilterlib`) | adaptive; optional — degrades to a no-op pass-through if absent |
 | Loudness | **pyloudnorm** (EBU R128) | measured after denoise, before VAD |
 | Voice-activity detection | **Silero VAD** | via `torch.hub`, cached after first call |
-| Speech-to-text | **OpenAI Whisper** (`base`) | `TLDW_WHISPER_MODEL` env / `model` request field |
+| Speech-to-text | **OpenAI Whisper** (`base`, `word_timestamps=True`) | `TLDW_WHISPER_MODEL` env / `model` request field |
 | Compute device | MPS → CUDA → CPU | with per-slice CPU fallback |
 
 - The pipeline is **lazily imported** on the first `/transcribe` call
   (`_load_transcriber()`), so `/highlight` startup is unaffected — torchaudio and
   Whisper load on first use, and the weights download on that first call.
+- Each segment carries **per-word timestamps** (`words: [{word,start,end}]`),
+  threaded through `transcriptSegments` to the clip export, where they drive the
+  **karaoke (word-by-word) subtitles** burned into portrait Shorts (`POST /clip`).
 
 ## Known gaps / next steps
 
-- **Segments are discarded after joining** — the response carries word-free
-  segment timecodes, but the app only uses `text`. Keeping them would let a
-  ranked line seek straight to its moment in the source video.
+- **Karaoke needs an ffmpeg with libass** — the vertical 1080×1920 render always
+  works, but burning captions needs the `subtitles` filter. Without libass the
+  export succeeds *without* captions and the app says so; install an ffmpeg built
+  with libass (e.g. the full Homebrew formula) to enable them.
 - **PyTorch Whisper only** — the PoC's `run_whisper.py` also has an MLX backend
   (faster on Apple Silicon); the backend wrapper currently wires only OpenAI.
 - **Whole-file transcode per request** — no caching of the preprocessed WAV, so
   re-transcribing the same file redoes extraction + VAD.
+- **No contextual emoji** — the PoC's per-clip emoji (`generate_emoji_for_text`,
+  Llama 3.2 3B via `mlx_lm`) is intentionally not wired, to avoid the heavy LLM
+  dependency; `generate_ass_file` is called with an empty emoji.

@@ -167,7 +167,8 @@ poc-audio-extraction/           Raw recording → transcript (feeds the highligh
   run_pipeline.py / run_whisper.py  standalone CLI drivers for the PoC
 
 poc-video-clipper/              Ranked spans → cut .mp4 Shorts
-  cut_viral_clips.py              ffmpeg re-encode each {start,end} span to a clip
+  cut_viral_clips.py              ffmpeg cut → 1080×1920 portrait clip (blurred fill bg)
+  subtitle_generator.py           karaoke (word-by-word) ASS captions burned in (libass)
 
 backend/                        FastAPI sidecar serving the highlighter pipeline
   server.py                       /health · /highlight · /backsound · /bloopers · /transcribe · /clip
