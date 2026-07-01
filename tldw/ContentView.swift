@@ -543,8 +543,9 @@ private struct EditorView: View {
     // Detected blooper (dead-air) spans, surfaced into the same timeline sequence.
     @State private var bloopers: [BlooperSpan] = []
     @State private var blooperVideoURL: URL?
-    @State private var bigPlayer = AVPlayer()       // drives the top preview for blooper spans
+    @State private var bigPlayer = AVPlayer()       // drives the top preview (sentence clips + blooper spans)
     @State private var bigEndObserver: Any?
+    @State private var loadedURL: URL?              // which file bigPlayer currently holds
 
     /// The marked clips in timeline order (sentences first, then bloopers).
     private var mergeItems: [MergeClip] {
@@ -600,25 +601,48 @@ private struct EditorView: View {
         }
     }
 
+    /// Point the shared preview player at `url` (no-op if it's already loaded).
+    /// The source recording and the blooper scan share the same file, so this
+    /// usually loads once and both sentence + blooper previews reuse it.
+    private func load(_ url: URL?) {
+        guard let url, loadedURL != url else { return }
+        bigPlayer.replaceCurrentItem(with: AVPlayerItem(url: url))
+        loadedURL = url
+    }
+
+    /// Seek the big preview to [start, end] and play only that range.
+    private func playSpan(start: Double, end: Double) {
+        guard let item = bigPlayer.currentItem else { return }
+        stopSpan()
+        let startTime = CMTime(seconds: start, preferredTimescale: 600)
+        let endTime = CMTime(seconds: end, preferredTimescale: 600)
+        bigPlayer.pause()
+        item.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            bigPlayer.play()
+        }
+        bigEndObserver = bigPlayer.addBoundaryTimeObserver(
+            forTimes: [NSValue(time: endTime)], queue: .main
+        ) { [weak bigPlayer] in bigPlayer?.pause() }
+    }
+
+    /// Select a transcript line and play its recorded span from the source video.
+    /// Falls back to a text placeholder for pasted lines that have no timecodes.
     private func selectSentence(_ clip: LineScore) {
         selection = .sentence(clip.id)
-        stopSpan()
+        if let s = clip.start, let e = clip.end, e > s, sourceVideoURL != nil {
+            load(sourceVideoURL)
+            playSpan(start: s, end: e)
+        } else {
+            stopSpan()
+        }
     }
 
     /// Select a blooper clip and play its span in the big preview.
     private func selectBlooper(_ span: BlooperSpan) {
         selection = .blooper(span.id)
-        guard let item = bigPlayer.currentItem else { return }
-        stopSpan()
-        let start = CMTime(seconds: span.start, preferredTimescale: 600)
-        let end = CMTime(seconds: span.end, preferredTimescale: 600)
-        bigPlayer.pause()
-        item.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-            bigPlayer.play()
-        }
-        bigEndObserver = bigPlayer.addBoundaryTimeObserver(
-            forTimes: [NSValue(time: end)], queue: .main
-        ) { [weak bigPlayer] in bigPlayer?.pause() }
+        load(blooperVideoURL)
+        guard bigPlayer.currentItem != nil else { return }
+        playSpan(start: span.start, end: span.end)
     }
 
     private func stopSpan() {
@@ -630,7 +654,7 @@ private struct EditorView: View {
     private func receiveBloopers(_ spans: [BlooperSpan], _ url: URL?) {
         bloopers = spans
         blooperVideoURL = url
-        if let url { bigPlayer.replaceCurrentItem(with: AVPlayerItem(url: url)) }
+        load(url)
         // If the selected blooper vanished after a re-scan, fall back to a sentence.
         if case let .blooper(id) = selection, !spans.contains(where: { $0.id == id }) {
             selection = clips.first.map { .sentence($0.id) }
@@ -638,14 +662,22 @@ private struct EditorView: View {
         }
     }
 
-    /// Spoken length of the sentence clips (shown in the header).
-    private var totalSeconds: Int {
-        clips.reduce(0) { $0 + estimatedSeconds($1.text) }
+    /// Real duration of a line's recorded span; falls back to a text estimate for
+    /// pasted lines that carry no timecodes.
+    private func clipSeconds(_ c: LineScore) -> Double {
+        if let s = c.start, let e = c.end, e > s { return e - s }
+        return Double(estimatedSeconds(c.text))
     }
 
-    /// Full timeline length including the appended blooper spans (drives the ruler).
+    /// Total length of the sentence clips (shown in the header).
+    private var totalSeconds: Int {
+        Int(clips.reduce(0.0) { $0 + clipSeconds($1) }.rounded())
+    }
+
+    /// Timeline length driving the ruler — the longer of the two parallel lanes
+    /// (transcript clips vs. the blooper lane below it).
     private var timelineSeconds: Int {
-        totalSeconds + Int(bloopers.reduce(0.0) { $0 + $1.duration }.rounded())
+        max(totalSeconds, Int(bloopers.reduce(0.0) { $0 + $1.duration }.rounded()))
     }
 
     var body: some View {
@@ -672,7 +704,15 @@ private struct EditorView: View {
             // The panel auto-scans the first-page recording (no second video pick).
             BlooperPanel(onBloopers: receiveBloopers, sourceVideoURL: sourceVideoURL)
         }
-        .onAppear { if selection == nil, let f = clips.first { selection = .sentence(f.id) } }
+        .onAppear {
+            if selection == nil, let f = clips.first { selection = .sentence(f.id) }
+            // Load the source recording and park on the first clip's start frame,
+            // so the preview shows real footage without auto-playing on entry.
+            load(sourceVideoURL)
+            if let s = clips.first?.start {
+                bigPlayer.seek(to: CMTime(seconds: s, preferredTimescale: 600))
+            }
+        }
         .onDisappear { stopSpan() }
         .alert("Couldn’t export clips",
                isPresented: Binding(get: { exportError != nil },
@@ -765,11 +805,46 @@ private struct EditorView: View {
         Group {
             if let span = currentBlooper, blooperVideoURL != nil {
                 blooperPreview(span)
+            } else if let clip = currentClip,
+                      clip.start != nil, clip.end != nil, sourceVideoURL != nil {
+                sentenceVideoPreview(clip)
             } else {
                 sentencePreview
             }
         }
         .frame(maxWidth: .infinity, minHeight: 320)
+    }
+
+    /// A selected transcript line's real footage, cut to its recorded [start, end]
+    /// span and played in place from the source recording.
+    private func sentenceVideoPreview(_ clip: LineScore) -> some View {
+        ZStack(alignment: .bottom) {
+            VideoPlayer(player: bigPlayer)
+                .background(Color.black)
+
+            HStack(spacing: 8) {
+                Image(systemName: "text.quote")
+                Text("“\(clip.text)”").lineLimit(1)
+                Spacer()
+                if let s = clip.start, let e = clip.end {
+                    Text("\(timecode(s)) – \(timecode(e)) · \(String(format: "%.1fs", e - s))")
+                        .monospacedDigit()
+                }
+                Button { selectSentence(clip) } label: { Label("Replay", systemImage: "arrow.clockwise") }
+                    .buttonStyle(.borderless)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.black.opacity(0.55))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    /// m:ss timecode for a position in the source video.
+    private func timecode(_ s: Double) -> String {
+        let t = Int(s.rounded())
+        return String(format: "%d:%02d", t / 60, t % 60)
     }
 
     /// The blooper span playing in place from its source video.
@@ -793,7 +868,8 @@ private struct EditorView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
-    /// The text placeholder for a selected sentence clip (no real footage yet).
+    /// Text placeholder for a selected line with no source span to play — pasted
+    /// transcripts (no timecodes) or when the source recording is unavailable.
     private var sentencePreview: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14)
@@ -815,7 +891,7 @@ private struct EditorView: View {
                     Text("clip ≈ \(estimatedSeconds(c.text)) seconds")
                         .font(.caption).foregroundStyle(.tertiary)
                 }
-                Text("Rendered video preview arrives with the audio/cutting step")
+                Text("This line has no source timecodes — drop in a recording to preview real footage")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             .padding(32)
@@ -873,16 +949,24 @@ private struct EditorView: View {
 
     private let pxPerSec: CGFloat = 26
     private func clipWidth(_ c: LineScore) -> CGFloat {
-        max(90, CGFloat(estimatedSeconds(c.text)) * pxPerSec)
+        max(90, CGFloat(clipSeconds(c)) * pxPerSec)
     }
     private func bloopWidth(_ b: BlooperSpan) -> CGFloat {
         max(54, CGFloat(b.duration) * pxPerSec)
     }
-    private var contentWidth: CGFloat {
+    /// Width of the transcript lane (sentence clips laid end to end).
+    private var transcriptWidth: CGFloat {
         let sentences = clips.reduce(0) { $0 + clipWidth($1) }
+        return sentences + CGFloat(max(0, clips.count - 1)) * 2
+    }
+    /// Width of the blooper lane below the transcript lane.
+    private var blooperLaneWidth: CGFloat {
         let dead = bloopers.reduce(0) { $0 + bloopWidth($1) }
-        let count = clips.count + bloopers.count
-        return sentences + dead + CGFloat(max(0, count - 1)) * 2
+        return dead + CGFloat(max(0, bloopers.count - 1)) * 2
+    }
+    /// Ruler/waveform span — the wider of the two parallel lanes.
+    private var contentWidth: CGFloat {
+        max(transcriptWidth, blooperLaneWidth)
     }
 
     private var strip: some View {
@@ -905,6 +989,8 @@ private struct EditorView: View {
             ScrollView(.horizontal, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 6) {
                     TimelineRuler(width: contentWidth, totalSeconds: timelineSeconds, pxPerSec: pxPerSec)
+                    // Transcript lane — the sentence clips.
+                    LaneLabel(text: "Transcript")
                     HStack(spacing: 2) {
                         ForEach(clips) { clip in
                             TimelineClip(clip: clip,
@@ -915,21 +1001,27 @@ private struct EditorView: View {
                                          onMark: { toggleMark(.sentence(clip.id)) },
                                          onRemove: { onRemove(clip.id) })
                         }
-                        ForEach(bloopers) { span in
-                            BlooperTimelineClip(span: span,
-                                                width: bloopWidth(span),
-                                                isCurrent: selection == .blooper(span.id),
-                                                isMarked: marked.contains(.blooper(span.id)),
-                                                onSelect: { selectBlooper(span) },
-                                                onMark: { toggleMark(.blooper(span.id)) },
-                                                onRemove: {
-                                                    bloopers.removeAll { $0.id == span.id }
-                                                    marked.remove(.blooper(span.id))
-                                                    if selection == .blooper(span.id) {
-                                                        selection = clips.first.map { .sentence($0.id) }
-                                                        stopSpan()
-                                                    }
-                                                })
+                    }
+                    // Blooper lane — separate sequence below the transcript clips.
+                    if !bloopers.isEmpty {
+                        LaneLabel(text: "Bloopers")
+                        HStack(spacing: 2) {
+                            ForEach(bloopers) { span in
+                                BlooperTimelineClip(span: span,
+                                                    width: bloopWidth(span),
+                                                    isCurrent: selection == .blooper(span.id),
+                                                    isMarked: marked.contains(.blooper(span.id)),
+                                                    onSelect: { selectBlooper(span) },
+                                                    onMark: { toggleMark(.blooper(span.id)) },
+                                                    onRemove: {
+                                                        bloopers.removeAll { $0.id == span.id }
+                                                        marked.remove(.blooper(span.id))
+                                                        if selection == .blooper(span.id) {
+                                                            selection = clips.first.map { .sentence($0.id) }
+                                                            stopSpan()
+                                                        }
+                                                    })
+                            }
                         }
                     }
                     WaveformTrack(width: contentWidth)
@@ -1115,6 +1207,17 @@ private struct TimelineRuler: View {
             }
         }
         .frame(width: max(width, CGFloat(totalSeconds) * pxPerSec), height: 18, alignment: .topLeading)
+    }
+}
+
+/// Small caption marking a timeline lane (Transcript / Bloopers).
+private struct LaneLabel: View {
+    let text: String
+    var body: some View {
+        Text(text.uppercased())
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.45))
+            .padding(.top, 2)
     }
 }
 
