@@ -2,14 +2,13 @@
 //  BlooperView.swift
 //  tldw — Blooper (non-speech) detector
 //
-//  An inline panel docked under the editor's timeline. Pick a source video
-//  (drag-and-drop or browse); detection runs in the Python backend (Silero VAD +
-//  an optional OpenCV lip check) and the detected non-speech spans are reported
-//  up to the editor, which drops them onto the timeline. Previewing a span
-//  happens in the editor's big preview, so this panel has no player of its own.
-//
-//  For now the video is chosen explicitly here; eventually it should default to
-//  the source of the selected clip on the timeline.
+//  An inline panel docked under the editor's timeline. It scans the recording
+//  dropped on the first page automatically (passed in as `sourceVideoURL`);
+//  detection runs in the Python backend (Silero VAD + an optional OpenCV lip
+//  check) and the detected non-speech spans are reported up to the editor, which
+//  drops them onto the timeline. Previewing a span happens in the editor's big
+//  preview, so this panel has no player of its own. The user can still Change to
+//  a different video (drag-and-drop or browse) to override the source.
 //
 
 import SwiftUI
@@ -19,6 +18,9 @@ import UniformTypeIdentifiers
 struct BlooperPanel: View {
     /// Reports the detected spans + their source video up to the editor.
     var onBloopers: ([BlooperSpan], URL?) -> Void = { _, _ in }
+    /// The recording dropped on the first page. The panel scans it automatically,
+    /// so the user doesn't pick a video again (they can still Change it).
+    var sourceVideoURL: URL? = nil
 
     @State private var videoURL: URL?
     @State private var response: BlooperResponse?
@@ -38,6 +40,13 @@ struct BlooperPanel: View {
         .padding(.horizontal, 20).padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
+        .onAppear(perform: autoScanSource)
+    }
+
+    /// Scan the first-page recording automatically the first time the panel shows.
+    private func autoScanSource() {
+        guard videoURL == nil, let src = sourceVideoURL else { return }
+        load(src)
     }
 
     // MARK: - Header (title + video input)

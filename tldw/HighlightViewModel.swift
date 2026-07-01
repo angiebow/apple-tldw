@@ -8,15 +8,19 @@ import Observation
 
 @Observable
 final class HighlightViewModel {
-    var transcriptText: String = SampleText.podcastExcerpt
+    /// The transcript produced from the dropped recording (shown as provenance in
+    /// the results header). Empty until a recording has been transcribed.
+    var transcriptText: String = ""
     var summary: String = ""
     var relevantLines: [LineScore] = []
     var viralLines: [LineScore] = []
     var modelInfo: ModelInfo?
     var lineCount: Int = 0
     var isLoading = false
-    var statusMessage = "Paste a transcript (or use the sample), start the backend, then tap Find Highlights."
+    var statusMessage = "Start the backend, then drop in a recording to generate Shorts."
     var serverReachable: Bool?
+    /// The recording this transcript came from — the editor cuts clips from it.
+    var sourceVideoURL: URL?
 
     private let service = HighlightService()
 
@@ -26,19 +30,43 @@ final class HighlightViewModel {
         serverReachable = await service.health()
     }
 
-    func findHighlights() async {
-        let text = transcriptText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.count >= 40 else {
-            statusMessage = "Add a bit more text — at least ~40 characters."
+    /// One-shot pipeline: transcribe a dropped recording, then rank its lines.
+    /// The extracted audio is the input now — there is no manual transcript step —
+    /// so both stages run under a single loading state (media in → Shorts out).
+    func transcribeAndHighlight(at url: URL) async {
+        isLoading = true
+        defer { isLoading = false }
+
+        // ── 1. Extract audio + transcribe (backend preprocess + Whisper) ──
+        statusMessage = "Extracting audio and transcribing… first run downloads the Whisper model."
+        let transcript: String
+        let segments: [TranscriptSegment]
+        do {
+            let response = try await service.transcribe(videoPath: url.path)
+            let text = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            serverReachable = true
+            guard !text.isEmpty else {
+                clearResults()
+                transcriptText = ""
+                sourceVideoURL = nil
+                statusMessage = "No speech found in \(response.source) — try another recording."
+                return
+            }
+            transcript = text
+            transcriptText = text
+            segments = response.segments
+            sourceVideoURL = url   // the editor cuts clips from this recording
+        } catch {
+            statusMessage = error.localizedDescription
+            serverReachable = false
             return
         }
 
-        isLoading = true
+        // ── 2. Summarize, embed, and score the transcribed lines ──
+        // Pass segments so each ranked line keeps its start/end span (for clipping).
         statusMessage = "Summarizing, embedding, and scoring lines… first run downloads the models."
-        defer { isLoading = false }
-
         do {
-            let response = try await service.highlight(text, topK: 10)
+            let response = try await service.highlight(transcript, segments: segments, topK: 10)
             summary = response.summary
             relevantLines = response.relevant
             viralLines = response.viral
@@ -47,23 +75,26 @@ final class HighlightViewModel {
             statusMessage = "Done — ranked \(response.lineCount) lines."
             serverReachable = true
         } catch {
-            summary = ""
-            relevantLines = []
-            viralLines = []
-            modelInfo = nil
-            lineCount = 0
+            clearResults()
             statusMessage = error.localizedDescription
             serverReachable = false
         }
     }
 
-    func loadSample() {
-        transcriptText = SampleText.podcastExcerpt
+    /// Clear back to the empty input state (drop-a-recording screen).
+    func reset() {
+        transcriptText = ""
+        sourceVideoURL = nil
+        clearResults()
+        statusMessage = "Drop in a recording to generate Shorts."
+    }
+
+    /// Wipe any ranked results (used before a fresh run and on failure).
+    private func clearResults() {
         summary = ""
         relevantLines = []
         viralLines = []
         modelInfo = nil
         lineCount = 0
-        statusMessage = "Sample loaded."
     }
 }

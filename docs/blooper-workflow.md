@@ -6,8 +6,9 @@ How tldw finds the "bloopers" in a video — every span where nobody is talking
 preview in place.**
 
 It lives as an inline panel docked **under the editor's timeline** (the "line
-sequence"). For now the source video is chosen explicitly in that panel;
-eventually it should default to the source of the selected clip on the timeline.
+sequence"). It **auto-scans the recording dropped on the first page** (the same
+`sourceVideoURL` the clips are cut from), so there's no second video pick — the
+user can still **Change** to a different video to override it.
 
 Unlike the standalone PoC (`poc-blooper-detector/blooper.py`, which also *cuts*
 one `.mp4` per span), the app never ships clips around: it sends the backend a
@@ -35,8 +36,8 @@ flowchart TD
 
 | Where | What happens |
 |---|---|
-| `ContentView.swift` · `EditorView` | `BlooperPanel(onBloopers:)` is docked under the timeline; detected spans + their source video flow back up. Spans render as red dead-air clips in the same timeline sequence as the orange sentence clips (`BlooperTimelineClip`); clicking one plays it in the big top preview. Each clip has a merge checkbox — marking clips and tapping **Merge** opens `MergePreviewView`, which concatenates the marked blooper spans into one `AVMutableComposition` and plays it. |
-| `BlooperView.swift` · `pickVideo()` | `NSOpenPanel` (movie types) returns a security-scoped URL; the app already holds `files.user-selected.read-only`. |
+| `ContentView.swift` · `EditorView` | `BlooperPanel(onBloopers:sourceVideoURL:)` is docked under the timeline; detected spans + their source video flow back up. Spans render as red dead-air clips in the same timeline sequence as the orange sentence clips (`BlooperTimelineClip`); clicking one plays it in the big top preview. Each clip has a merge checkbox — marking clips and tapping **Merge** opens `MergePreviewView`, which concatenates the marked blooper spans into one `AVMutableComposition` and plays it. |
+| `BlooperView.swift` · `autoScanSource()` | On appear, scans the first-page recording (`sourceVideoURL`) automatically — no manual pick. `pickVideo()` (`NSOpenPanel`, movie types) stays as a **Change** override; both return a security-scoped URL and the app already holds `files.user-selected.read-only`. |
 | `HighlightService.swift` · `detectBloopers()` | POSTs `{ video_path, use_lip_check }` to `http://127.0.0.1:8000/bloopers`. 600 s timeout — the first call downloads Silero VAD and decodes the whole video. |
 | `server.py` · `bloopers()` | Validates the path, lazily imports the PoC module, runs `detect()`, returns span metadata. |
 
@@ -138,8 +139,9 @@ on disk, **500** if ffmpeg / VAD / decoding fails (the reason is included).
 
 ## Known gaps / next steps
 
-- **Video is picked manually** — the panel should default to the source video of
-  the selected clip on the timeline, instead of a separate `NSOpenPanel`.
+- **Source video is auto-scanned** — the panel now scans the first-page recording
+  (`sourceVideoURL`) on appear, with a manual **Change** (`NSOpenPanel`) override.
+  A finer default would be the source of the *selected clip* on the timeline.
 - **Timeline clips are markers, not media** — blooper spans now sit in the
   timeline sequence (`BlooperTimelineClip`) and are removable, but they're
   positional markers; wiring `cut_clips()` (or in-place seeks) would let them

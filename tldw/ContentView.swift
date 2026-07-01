@@ -11,6 +11,7 @@ import SwiftUI
 import AppKit
 import AVFoundation
 import AVKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var model = HighlightViewModel()
@@ -22,6 +23,7 @@ struct ContentView: View {
     @State private var selectedOrder: [Int] = []   // line ids, in the order picked
     @State private var detailLine: LineScore?
     @State private var showEditor = false
+    @State private var isDropTargeted = false
     @AppStorage("isDarkMode") private var isDarkMode = false
 
     /// All ranked lines keyed by their global line index (both lists share the
@@ -60,6 +62,7 @@ struct ContentView: View {
                 } else if showEditor && !selectedClips.isEmpty {
                     EditorView(
                         clips: selectedClips,
+                        sourceVideoURL: model.sourceVideoURL,
                         onBack: { showEditor = false },
                         onRemove: { id in toggleSelection(id, false) },
                         onMove: { from, to in selectedOrder.move(fromOffsets: IndexSet(integer: from), toOffset: to) }
@@ -139,7 +142,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 titleBlock(emoji: "🩳", title: "Generate Shorts",
-                           subtitle: "Paste a transcript, then find the most relevant and viral-worthy lines.")
+                           subtitle: "Drop in a recording — tldw extracts the audio, transcribes it, then finds the most relevant and viral-worthy lines.")
                 Spacer()
                 HStack(spacing: 10) {
                     serverPill
@@ -147,30 +150,84 @@ struct ContentView: View {
                 }
             }
 
-            TextEditor(text: $model.transcriptText)
-                .font(.callout)
-                .padding(12)
-                .scrollContentBackground(.hidden)
-                .background(Color(nsColor: .controlBackgroundColor),
-                            in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
-                .frame(maxHeight: .infinity)
+            mediaDropZone
 
-            HStack {
-                Text("\(model.transcriptText.count) characters")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button { model.loadSample() } label: {
-                    Label("Sample", systemImage: "doc.text")
-                }
-                Button { Task { await model.findHighlights() } } label: {
-                    Label("Generate Shorts", systemImage: "sparkles")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.transcriptText.trimmingCharacters(in: .whitespacesAndNewlines).count < 40)
+            if !model.statusMessage.isEmpty {
+                Label(model.statusMessage,
+                      systemImage: model.serverReachable == false
+                        ? "exclamationmark.triangle.fill" : "info.circle")
+                    .font(.callout)
+                    .foregroundStyle(model.serverReachable == false ? Color.red : Color.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
             }
         }
         .padding(28)
+    }
+
+    /// The input is now a recording, not pasted text: drag an audio/video file
+    /// here (or click to browse) and the whole pipeline runs from the extracted audio.
+    private var mediaDropZone: some View {
+        Button { pickAndTranscribe() } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [7]))
+                    .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.45))
+                VStack(spacing: 10) {
+                    Image(systemName: "waveform.badge.plus")
+                        .font(.system(size: 40))
+                        .foregroundStyle(isDropTargeted ? Color.accentColor : .secondary)
+                    Text(isDropTargeted ? "Drop to transcribe" : "Drag an audio or video recording here")
+                        .font(.title3.weight(.medium))
+                    Text("or click to browse — the extracted audio is transcribed, then ranked into Shorts")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Text("MP4 · MOV · M4A · MP3 · WAV · and more")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                .padding(24)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(isDropTargeted ? Color.accentColor.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 16))
+            .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+        .dropDestination(for: URL.self) { urls, _ in handleDrop(urls) }
+            isTargeted: { isDropTargeted = $0 }
+    }
+
+    /// Browse for a local video/audio file, then run the transcribe→rank pipeline.
+    private func pickAndTranscribe() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie, .audio, .mp3, .wav, .mpeg4Audio]
+        panel.message = "Choose a video or audio recording to turn into Shorts."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        start(url)
+    }
+
+    /// Accept a dropped file, ignoring anything that isn't audio/video.
+    private func handleDrop(_ urls: [URL]) -> Bool {
+        guard let url = urls.first(where: isMedia) else { return false }
+        start(url)
+        return true
+    }
+
+    private func isMedia(_ url: URL) -> Bool {
+        if let type = UTType(filenameExtension: url.pathExtension) {
+            return type.conforms(to: .audiovisualContent)
+                || type.conforms(to: .movie)
+                || type.conforms(to: .audio)
+        }
+        return ["mov", "mp4", "m4v", "avi", "mkv", "webm",
+                "wav", "mp3", "m4a", "aac", "flac", "ogg"].contains(url.pathExtension.lowercased())
+    }
+
+    private func start(_ url: URL) {
+        // Dropped/panel files carry a sandbox extension; hold it open for the read.
+        _ = url.startAccessingSecurityScopedResource()
+        Task { await model.transcribeAndHighlight(at: url) }
     }
 
     // MARK: - Results state ("Here are your Shorts")
@@ -283,8 +340,8 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            Button { model.loadSample() } label: {
-                Label("New transcript", systemImage: "arrow.uturn.backward")
+            Button { model.reset() } label: {
+                Label("New recording", systemImage: "arrow.uturn.backward")
             }
             .buttonStyle(.borderless)
         }
@@ -462,9 +519,14 @@ private struct ShortDetailView: View {
 
 private struct EditorView: View {
     let clips: [LineScore]                 // selected lines, in arranged order
+    let sourceVideoURL: URL?               // the recording clips are cut from
     let onBack: () -> Void
     let onRemove: (Int) -> Void            // by line id
     let onMove: (Int, Int) -> Void         // (fromOffset, toOffset)
+
+    // Export state: cut the selected spans to .mp4 files via the backend.
+    @State private var isExporting = false
+    @State private var exportError: String?
 
     /// What the big preview is showing — a sentence clip (text) or a blooper (video).
     private enum Selection: Hashable {
@@ -604,10 +666,18 @@ private struct EditorView: View {
             strip
             Divider()
             // Detected spans flow up into the timeline above (same sequence).
-            BlooperPanel(onBloopers: receiveBloopers)
+            // The panel auto-scans the first-page recording (no second video pick).
+            BlooperPanel(onBloopers: receiveBloopers, sourceVideoURL: sourceVideoURL)
         }
         .onAppear { if selection == nil, let f = clips.first { selection = .sentence(f.id) } }
         .onDisappear { stopSpan() }
+        .alert("Couldn’t export clips",
+               isPresented: Binding(get: { exportError != nil },
+                                    set: { if !$0 { exportError = nil } })) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
     }
 
     private func toggleMark(_ key: Selection) {
@@ -625,11 +695,54 @@ private struct EditorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button { } label: { Label("Share", systemImage: "square.and.arrow.up") }
-                .disabled(true)
-                .help("Sharing page — coming next")
+            if isExporting {
+                ProgressView().controlSize(.small)
+            }
+            Button { exportClips() } label: {
+                Label("Export \(exportableClips.count) clip\(exportableClips.count == 1 ? "" : "s")",
+                      systemImage: "square.and.arrow.down")
+            }
+            .disabled(isExporting || sourceVideoURL == nil || exportableClips.isEmpty)
+            .help(exportHelp)
         }
         .padding()
+    }
+
+    /// Selected clips that have a source-video span to cut (timestamped lines only).
+    private var exportableClips: [LineScore] {
+        clips.filter { $0.start != nil && $0.end != nil }
+    }
+
+    private var exportHelp: String {
+        if sourceVideoURL == nil { return "No source recording to cut from." }
+        if exportableClips.isEmpty { return "These clips have no timecodes to cut." }
+        return "Cut the selected spans to .mp4 files and reveal them in Finder."
+    }
+
+    /// Cut the exportable clips out of the source video, then reveal them in Finder.
+    private func exportClips() {
+        guard let url = sourceVideoURL else { return }
+        let spans = exportableClips.map {
+            ClipSpan(start: $0.start ?? 0, end: $0.end ?? 0, text: $0.text)
+        }
+        isExporting = true
+        exportError = nil
+        Task {
+            defer { isExporting = false }
+            do {
+                let result = try await service.exportClips(videoPath: url.path, clips: spans)
+                // Reveal the written files (or the folder) in Finder.
+                let urls = result.clips.map { URL(fileURLWithPath: $0.path) }
+                if urls.isEmpty {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [URL(fileURLWithPath: result.outputDir)])
+                } else {
+                    NSWorkspace.shared.activateFileViewerSelecting(urls)
+                }
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
     }
 
     @ViewBuilder

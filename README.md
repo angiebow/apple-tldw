@@ -161,8 +161,16 @@ poc-content-highlighter/        Steps 4–5 — virality detector + reranker
   processed/{train,val,test}.parquet       derived splits (git-ignored)
   models/                                   fine-tuned checkpoints (git-ignored)
 
+poc-audio-extraction/           Raw recording → transcript (feeds the highlighter)
+  audio_preprocessor/             ffmpeg extract → denoise → normalise → Silero VAD
+  transcribe_pipeline.py          VAD-guided Whisper STT → transcript text
+  run_pipeline.py / run_whisper.py  standalone CLI drivers for the PoC
+
+poc-video-clipper/              Ranked spans → cut .mp4 Shorts
+  cut_viral_clips.py              ffmpeg re-encode each {start,end} span to a clip
+
 backend/                        FastAPI sidecar serving the highlighter pipeline
-  server.py                       /health + /highlight (all 5 steps)
+  server.py                       /health · /highlight · /backsound · /bloopers · /transcribe · /clip
   setup.sh / run.sh               create venv / serve on 127.0.0.1:8000
 
 tldw/                           SwiftUI macOS app (highlighter front-end)
@@ -194,9 +202,11 @@ available. Typical order:
 ## Highlighter app + backend
 
 The macOS app in `tldw/` is the **Transcript Content Highlighter** front-end:
-paste a transcript and get back two top-10 lists — most *relevant* lines and
-most *viral-worthy* lines. The models (Pegasus, all-mpnet, distilbert, bert) run
-in a local FastAPI sidecar (`backend/`); the app talks to it over
+drop in a recording (video/audio) and get back two top-10 lists — most
+*relevant* lines and most *viral-worthy* lines. The app extracts the audio and
+transcribes it (see [docs/transcription-workflow.md](docs/transcription-workflow.md)),
+then ranks the lines. The models (Whisper, Pegasus, all-mpnet, distilbert, bert)
+run in a local FastAPI sidecar (`backend/`); the app talks to it over
 `http://127.0.0.1:8000`.
 
 ```bash

@@ -51,6 +51,12 @@ SUMM_MAX_INPUT  = 1024  # Pegasus encoder cap (max_position_embeddings)
 SCORE_MAX_LEN   = 64    # detector/reranker were trained at max_length=64
 MIN_LINE_WORDS  = 4     # drop trivially short lines
 
+# Scene builder (matches the poc-audio-extraction pipeline): group transcript
+# segments into semantically + grammatically coherent scenes, floored/capped in
+# duration. These become the "Shorts" that get ranked and cut.
+SCENE_MIN_SECONDS = float(os.environ.get("TLDW_SCENE_MIN_SECONDS", "10.0"))
+SCENE_MAX_SECONDS = float(os.environ.get("TLDW_SCENE_MAX_SECONDS", "60.0"))
+
 # Backsound: sentiment -> valence/arousal -> MusicGen prompt -> music bed.
 EMOTION_NAME      = "j-hartmann/emotion-english-distilroberta-base"
 MUSICGEN_NAME     = os.environ.get("TLDW_MUSICGEN", "facebook/musicgen-small")
@@ -62,6 +68,19 @@ MUSICGEN_TOK_RATE = 50                   # MusicGen emits ~50 audio tokens / sec
 # optional OpenCV lip-motion check. The pipeline lives in the PoC module.
 POC_BLOOPER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                "..", "poc-blooper-detector")
+
+# Transcription: a raw video/audio file → preprocessed 16 kHz WAV + VAD → Whisper
+# STT → transcript text (which then feeds /highlight). Pipeline lives in the PoC.
+POC_AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "poc-audio-extraction")
+WHISPER_MODEL = os.environ.get("TLDW_WHISPER_MODEL", "base")
+
+# Clipping: cut the ranked lines' spans out of the source video into .mp4 files.
+POC_CLIPPER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "poc-video-clipper")
+# Where exported clips land (per-source subfolder is added at request time).
+CLIPS_OUT_DIR = os.environ.get(
+    "TLDW_CLIPS_DIR", os.path.expanduser("~/Movies/tldw-clips"))
 
 # ── Lazy-loaded model singletons ─────────────────────────────────────────
 _models = {}
@@ -173,6 +192,85 @@ def reranker_scores(lines: list[str], m) -> np.ndarray:
     enc = tok(lines, return_tensors="pt", truncation=True, padding=True,
               max_length=SCORE_MAX_LEN).to(DEVICE)
     return model(**enc).logits.squeeze(-1).cpu().numpy()
+
+
+# ── Scene builder (matches the poc-audio-extraction pipeline) ──────────────────
+# Group consecutive transcript segments into coherent "scenes" (the Shorts we
+# rank + cut), using the same logic as poc-video-clipper/run_llm_pipeline.py:
+#   1. Embed each segment; take adjacent cosine similarities.
+#   2. Cut a new scene at a boundary only when similarity dips below
+#      (mean − 0.5·std) AND it's a grammatical break (prev ends .?!, next is
+#      capitalised) — a "grammatical guard" so we never split mid-sentence.
+#   3. Recursively split any scene longer than SCENE_MAX_SECONDS at its weakest
+#      grammatical boundary (or weakest boundary overall if none qualify).
+#   4. Drop scenes shorter than SCENE_MIN_SECONDS.
+# Embeddings are unit-normalised, so cosine similarity is just a dot product.
+def _split_scene_recursive(scene: list[dict], emb: dict, max_duration: float) -> list[list[dict]]:
+    duration = scene[-1]["end"] - scene[0]["start"]
+    if duration <= max_duration or len(scene) <= 1:
+        return [scene]
+
+    # Prefer grammatical break points; fall back to every boundary.
+    grammatical = []
+    for i in range(len(scene) - 1):
+        a, b = scene[i]["text"].strip(), scene[i + 1]["text"].strip()
+        if a and a[-1] in ".?!" and b and b[0].isupper():
+            grammatical.append(i)
+    candidates = grammatical or list(range(len(scene) - 1))
+
+    lowest_sim, split_idx = float("inf"), -1
+    for i in candidates:
+        sim = float(np.dot(emb[scene[i]["id"]], emb[scene[i + 1]["id"]]))
+        if sim < lowest_sim:
+            lowest_sim, split_idx = sim, i
+    if split_idx == -1:
+        return [scene]
+
+    left, right = scene[:split_idx + 1], scene[split_idx + 1:]
+    return (_split_scene_recursive(left, emb, max_duration)
+            + _split_scene_recursive(right, emb, max_duration))
+
+
+def build_scenes(segments, m,
+                 min_duration: float = SCENE_MIN_SECONDS,
+                 max_duration: float = SCENE_MAX_SECONDS) -> list[dict]:
+    """Build 10–60s scenes from timestamped transcript segments (see above)."""
+    segs = [{"id": i, "start": float(s.start), "end": float(s.end), "text": s.text}
+            for i, s in enumerate(segments)]
+    if not segs:
+        return []
+
+    emb_arr = m["embedder"].encode([s["text"] for s in segs],
+                                   normalize_embeddings=True, convert_to_numpy=True)
+    emb = {segs[i]["id"]: emb_arr[i] for i in range(len(segs))}
+
+    if len(segs) == 1:
+        groups = [segs]
+    else:
+        sims = np.array([float(np.dot(emb_arr[i], emb_arr[i + 1]))
+                         for i in range(len(segs) - 1)])
+        threshold = float(sims.mean() - 0.5 * sims.std())
+        groups, current = [], [segs[0]]
+        for i in range(len(sims)):
+            a, b = segs[i]["text"].strip(), segs[i + 1]["text"].strip()
+            ends_punc = bool(a) and a[-1] in ".?!"
+            next_cap = bool(b) and b[0].isupper()
+            if sims[i] < threshold and ends_punc and next_cap:
+                groups.append(current)
+                current = [segs[i + 1]]
+            else:
+                current.append(segs[i + 1])
+        groups.append(current)
+
+    scenes = []
+    for group in groups:
+        for sg in _split_scene_recursive(group, emb, max_duration):
+            start, end = sg[0]["start"], sg[-1]["end"]
+            if end - start < min_duration:  # floor: no sub-10s scenes
+                continue
+            scenes.append({"start": round(start, 2), "end": round(end, 2),
+                           "text": " ".join(s["text"] for s in sg)})
+    return scenes
 
 
 # ── Audio helpers (shared by the backsound endpoint) ───────────────────────
@@ -299,13 +397,52 @@ def _load_blooper():
     return _blooper["mod"]
 
 
+# ── Transcription (audio_preprocessor → VAD-guided Whisper) ─────────────────
+# Same deferred-import trick as the blooper module: the transcription pipeline
+# only pulls in torchaudio + Whisper on the first /transcribe call, so /highlight
+# startup stays fast. Whisper weights download on that first call.
+_transcriber = {}
+
+
+def _load_transcriber():
+    if "mod" not in _transcriber:
+        if POC_AUDIO_DIR not in sys.path:
+            sys.path.insert(0, POC_AUDIO_DIR)
+        import transcribe_pipeline  # noqa: E402  (intentionally deferred)
+        _transcriber["mod"] = transcribe_pipeline
+    return _transcriber["mod"]
+
+
+# ── Clipping (cut ranked spans → .mp4 files) ────────────────────────────────
+_clipper = {}
+
+
+def _load_clipper():
+    if "mod" not in _clipper:
+        if POC_CLIPPER_DIR not in sys.path:
+            sys.path.insert(0, POC_CLIPPER_DIR)
+        import cut_viral_clips  # noqa: E402  (intentionally deferred)
+        _clipper["mod"] = cut_viral_clips
+    return _clipper["mod"]
+
+
 # ── API ──────────────────────────────────────────────────────────────────
 app = FastAPI(title="tldw highlighter")
+
+
+class TranscriptSegmentIn(BaseModel):
+    text: str
+    start: float
+    end: float
 
 
 class HighlightRequest(BaseModel):
     text: str
     top_k: int = 10
+    # Optional timestamped lines from /transcribe. When present, these are ranked
+    # directly (instead of re-splitting `text`) so each result carries start/end —
+    # which the /clip endpoint needs to cut the actual video span.
+    segments: Optional[list[TranscriptSegmentIn]] = None
 
 
 class BacksoundRequest(BaseModel):
@@ -316,6 +453,23 @@ class BacksoundRequest(BaseModel):
 class BlooperRequest(BaseModel):
     video_path: str                       # absolute path to the source video (local)
     use_lip_check: bool = True            # confirm a still mouth with the visual check
+
+
+class TranscribeRequest(BaseModel):
+    video_path: str                       # absolute path to a local video/audio file
+    model: Optional[str] = None           # Whisper size; defaults to TLDW_WHISPER_MODEL
+
+
+class ClipSpan(BaseModel):
+    start: float
+    end: float
+    text: str = ""
+
+
+class ClipRequest(BaseModel):
+    video_path: str                       # absolute path to the source video (local)
+    clips: list[ClipSpan]                 # spans to cut, in order
+    name: Optional[str] = None            # output subfolder name (defaults to the source stem)
 
 
 @app.get("/health")
@@ -329,11 +483,27 @@ def highlight(req: HighlightRequest):
     if len(text) < 40:
         raise HTTPException(status_code=400, detail="Transcript too short (need ~40+ characters).")
 
-    lines = split_lines(text)
-    if not lines:
-        raise HTTPException(status_code=400, detail="Could not extract any usable lines from the transcript.")
-
     m = _load_models()
+
+    # Timestamped path (from /transcribe): group segments into 10–60s scenes — the
+    # poc-audio-extraction behavior — so each ranked Short keeps a start/end span.
+    # Text path (pasted transcript): re-split into lines as before, no timestamps.
+    if req.segments:
+        scenes = build_scenes(req.segments, m)
+        lines = [sc["text"] for sc in scenes]
+        times = [(sc["start"], sc["end"]) for sc in scenes]
+        if not lines:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"No scenes of at least {SCENE_MIN_SECONDS:.0f}s could be formed "
+                        f"from the transcript — the recording may be too short."))
+    else:
+        lines = split_lines(text)
+        times = None
+        if not lines:
+            raise HTTPException(status_code=400,
+                                detail="Could not extract any usable lines from the transcript.")
+
     summary = summarize(text, m)
 
     relevance = relevance_scores(lines, summary, m)
@@ -342,11 +512,15 @@ def highlight(req: HighlightRequest):
 
     def row(i: int) -> dict:
         i = int(i)  # argsort yields np.int64; cast for JSON serialization
-        return {"index": i, "text": lines[i],
-                "relevance": round(float(relevance[i]), 4),
-                "viral_score": round(float(viral_score[i]), 4),
-                "viral_prob": round(float(viral_prob[i]), 4),
-                "viral_label": bool(viral_label[i])}
+        r = {"index": i, "text": lines[i],
+             "relevance": round(float(relevance[i]), 4),
+             "viral_score": round(float(viral_score[i]), 4),
+             "viral_prob": round(float(viral_prob[i]), 4),
+             "viral_label": bool(viral_label[i])}
+        if times is not None:
+            r["start"] = round(float(times[i][0]), 3)
+            r["end"] = round(float(times[i][1]), 3)
+        return r
 
     k = max(1, min(req.top_k, len(lines)))
     # Relevant list: all lines ranked by similarity to the summary.
@@ -434,5 +608,74 @@ def bloopers(req: BlooperRequest):
                 "label": b.label,
             }
             for i, b in enumerate(spans)
+        ],
+    }
+
+
+@app.post("/transcribe")
+def transcribe(req: TranscribeRequest):
+    """Turn a raw local video/audio file into transcript text.
+
+    Runs the audio_preprocessor pipeline (extract → denoise → normalise → VAD)
+    then VAD-guided Whisper STT. The macOS app picks the file and sends its local
+    path (app + backend share disk); the returned text drops straight into the
+    highlighter's transcript field."""
+    path = os.path.expanduser(req.video_path.strip())
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=400, detail=f"File not found: {req.video_path}")
+
+    mod = _load_transcriber()
+    model_name = (req.model or WHISPER_MODEL).strip()
+    try:
+        result = mod.transcribe(path, model_name=model_name)
+    except Exception as exc:  # ffmpeg / preprocessing / Whisper failures → 500
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}")
+
+    return {
+        "source": os.path.basename(path),
+        "duration_s": result["duration_s"],
+        "speech_ratio": result["speech_ratio"],
+        "model": result["model"],
+        "text": result["text"],
+        "segments": result["segments"],
+    }
+
+
+@app.post("/clip")
+def clip(req: ClipRequest):
+    """Cut the given spans out of the source video into standalone .mp4 files.
+
+    The app sends the source video path plus the selected Shorts' timecodes; each
+    span is re-encoded into its own clip under CLIPS_OUT_DIR/<name>/. Returns the
+    output folder and per-clip paths so the app can reveal them in Finder."""
+    path = os.path.expanduser(req.video_path.strip())
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=400, detail=f"Source video not found: {req.video_path}")
+
+    spans = [{"start": c.start, "end": c.end, "text": c.text}
+             for c in req.clips if c.end > c.start]
+    if not spans:
+        raise HTTPException(status_code=400, detail="No valid clip spans to cut.")
+
+    stem = os.path.splitext(os.path.basename(path))[0]
+    name = (req.name or stem).strip() or stem
+    out_dir = os.path.join(CLIPS_OUT_DIR, name)
+
+    mod = _load_clipper()
+    try:
+        written = mod.cut_clips(path, spans, out_dir)
+    except Exception as exc:  # ffmpeg failure / bad path → 500 with the reason
+        detail = getattr(exc, "stderr", None) or str(exc)
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", "replace")
+        raise HTTPException(status_code=500, detail=f"Clip cutting failed: {detail}")
+
+    return {
+        "source": os.path.basename(path),
+        "output_dir": out_dir,
+        "count": len(written),
+        "clips": [
+            {"index": i, "path": p, "start": s["start"], "end": s["end"], "text": s["text"]}
+            for i, (p, s) in enumerate(zip(written, spans))
         ],
     }

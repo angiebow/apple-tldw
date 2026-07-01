@@ -35,14 +35,18 @@ struct HighlightService {
         return http.statusCode == 200
     }
 
-    /// Run the highlighter pipeline and return the two ranked lists.
-    func highlight(_ text: String, topK: Int = 10) async throws -> HighlightResponse {
+    /// Run the highlighter pipeline and return the two ranked lists. Pass the
+    /// transcribe `segments` to get timestamped results (spans the editor can cut).
+    func highlight(_ text: String,
+                   segments: [TranscriptSegment]? = nil,
+                   topK: Int = 10) async throws -> HighlightResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("highlight"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 600  // first call downloads Pegasus + mpnet weights
 
-        request.httpBody = try JSONEncoder().encode(HighlightRequest(text: text, topK: topK))
+        request.httpBody = try JSONEncoder().encode(
+            HighlightRequest(text: text, topK: topK, segments: segments))
 
         let data: Data
         let response: URLResponse
@@ -128,6 +132,73 @@ struct HighlightService {
             return try JSONDecoder().decode(BlooperResponse.self, from: data)
         } catch {
             throw HighlightError.transport("could not decode bloopers response: \(error.localizedDescription)")
+        }
+    }
+
+    /// Transcribe a local video/audio file into text (preprocess + VAD-guided Whisper).
+    func transcribe(videoPath: String,
+                    model: String? = nil) async throws -> TranscribeResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("transcribe"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 1800  // first call downloads Whisper + decodes/transcribes the whole file
+
+        request.httpBody = try JSONEncoder().encode(
+            TranscribeRequest(videoPath: videoPath, model: model))
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw HighlightError.transport(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw HighlightError.transport("no HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            throw HighlightError.badStatus(http.statusCode, serverDetail(data))
+        }
+
+        do {
+            return try JSONDecoder().decode(TranscribeResponse.self, from: data)
+        } catch {
+            throw HighlightError.transport("could not decode transcribe response: \(error.localizedDescription)")
+        }
+    }
+
+    /// Cut the given spans out of the source video into .mp4 files on disk.
+    func exportClips(videoPath: String,
+                     clips: [ClipSpan],
+                     name: String? = nil) async throws -> ClipResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("clip"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 900  // re-encoding several spans can take a while
+
+        request.httpBody = try JSONEncoder().encode(
+            ClipRequest(videoPath: videoPath, clips: clips, name: name))
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw HighlightError.transport(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw HighlightError.transport("no HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            throw HighlightError.badStatus(http.statusCode, serverDetail(data))
+        }
+
+        do {
+            return try JSONDecoder().decode(ClipResponse.self, from: data)
+        } catch {
+            throw HighlightError.transport("could not decode clip response: \(error.localizedDescription)")
         }
     }
 
