@@ -73,11 +73,16 @@ POC_BLOOPER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # STT → transcript text (which then feeds /highlight). Pipeline lives in the PoC.
 POC_AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "..", "poc-audio-extraction")
-WHISPER_MODEL = os.environ.get("TLDW_WHISPER_MODEL", "base")
+# Single-pass MLX Whisper (hans-development). "turbo" → whisper-large-v3-turbo;
+# also accepts sizes ("base", "small", …) or a full mlx-community repo id.
+WHISPER_MODEL = os.environ.get("TLDW_WHISPER_MODEL", "turbo")
 
 # Clipping: cut the ranked lines' spans out of the source video into .mp4 files.
 POC_CLIPPER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                "..", "poc-video-clipper")
+# Subtitles: soft .srt sidecars written next to each exported clip (hans-development).
+POC_SUBTITLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "..", "poc-subtitles")
 # Where exported clips land (per-source subfolder is added at request time).
 CLIPS_OUT_DIR = os.environ.get(
     "TLDW_CLIPS_DIR", os.path.expanduser("~/Movies/tldw-clips"))
@@ -426,6 +431,19 @@ def _load_clipper():
     return _clipper["mod"]
 
 
+# ── Subtitles (soft .srt sidecars, hans-development poc-subtitles) ───────────
+_subs = {}
+
+
+def _load_subtitles():
+    if "mod" not in _subs:
+        if POC_SUBTITLES_DIR not in sys.path:
+            sys.path.insert(0, POC_SUBTITLES_DIR)
+        import subtitles  # noqa: E402  (intentionally deferred)
+        _subs["mod"] = subtitles
+    return _subs["mod"]
+
+
 # ── API ──────────────────────────────────────────────────────────────────
 app = FastAPI(title="tldw highlighter")
 
@@ -479,6 +497,7 @@ class ClipRequest(BaseModel):
     name: Optional[str] = None            # output subfolder name (defaults to the source stem)
     vertical: bool = True                 # render 1080×1920 portrait Shorts
     subtitles: bool = True                # burn karaoke captions (needs ffmpeg libass)
+    srt: bool = True                      # also write a soft .srt sidecar per clip
     # Full transcript segments with per-word times; the endpoint slices the words
     # falling inside each clip span to caption it. Optional (no words → no captions).
     segments: Optional[list[TranscriptSegmentIn]] = None
@@ -692,6 +711,23 @@ def clip(req: ClipRequest):
             detail = detail.decode("utf-8", "replace")
         raise HTTPException(status_code=500, detail=f"Clip cutting failed: {detail}")
 
+    # Soft .srt sidecar next to each clip (clip-relative cues from the words that
+    # fall inside the span). Non-fatal: the .mp4s already exist if this trips.
+    srt_paths: dict = {}
+    if req.srt:
+        try:
+            subs = _load_subtitles()
+            for p, s in zip(written, spans):
+                clip_words = subs.rebase_words(s["words"], s["start"], s["end"])
+                cues = subs.build_cues(clip_words) if clip_words else []
+                if not cues:
+                    continue
+                srt_path = os.path.splitext(p)[0] + ".srt"
+                subs.write_srt(cues, srt_path)
+                srt_paths[p] = srt_path
+        except Exception as exc:  # keep the clips; just skip captions
+            print(f"[tldw] .srt sidecar generation failed: {exc}")
+
     return {
         "source": os.path.basename(path),
         "output_dir": out_dir,
@@ -700,8 +736,10 @@ def clip(req: ClipRequest):
         # True only if captions were actually burned (requested AND ffmpeg has libass).
         "subtitles_applied": subtitles_applied,
         "subtitles_requested": req.subtitles,
+        "srt_count": len(srt_paths),
         "clips": [
-            {"index": i, "path": p, "start": s["start"], "end": s["end"], "text": s["text"]}
+            {"index": i, "path": p, "start": s["start"], "end": s["end"], "text": s["text"],
+             "srt": srt_paths.get(p)}
             for i, (p, s) in enumerate(zip(written, spans))
         ],
     }

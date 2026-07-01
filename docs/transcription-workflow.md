@@ -4,8 +4,8 @@ How tldw turns a **raw recording into a transcript** the highlighter can rank.
 The extracted audio **is** the app's input — there is no text field to paste
 into. You point the app at a local video or audio file and it runs, end to end:
 **extract audio → assess quality → adaptively denoise → level & normalise →
-detect speech (VAD) → transcribe each speech span (Whisper) → summarise, embed &
-score the lines → show the ranked Shorts.**
+transcribe the whole file (single-pass MLX Whisper + hallucination sanitizer) →
+summarise, embed & score the lines → show the ranked Shorts.**
 
 It **is** the input screen: a drop zone (drag a recording, or click to browse).
 Dropping a file kicks off the whole pipeline in one shot — transcription flows
@@ -26,9 +26,9 @@ flowchart TD
     C --> D["quality assessment<br/>SNR · RMS · flatness · clipping"]
     D --> E["adaptive denoise (DeepFilterNet)<br/>skipped if audio is clean / lib absent"]
     E --> F["AGC + EBU R128 loudness normalise"]
-    F --> G["Silero VAD<br/>speech-segment timestamps"]
-    G --> H["Whisper STT per speech span<br/>timestamps offset to source timeline"]
-    H --> I["segments joined → transcript text"]
+    F --> G["single-pass MLX Whisper<br/>word timestamps, full-file decode"]
+    G --> H["hallucination sanitizer<br/>drop stalled / looped / empty segments"]
+    H --> I["segments (+words) → transcript text"]
     I --> J["auto-chained: POST /highlight<br/>ranked Shorts (no manual step)"]
 ```
 
@@ -53,17 +53,25 @@ sees a consistent level. Denoising is **adaptive** — the quality assessment
 step is a no-op pass-through for already-clean audio or when `deepfilterlib`
 isn't installed (it degrades gracefully rather than failing).
 
-### 7. Transcription — VAD-guided Whisper
+### 7. Transcription — single-pass MLX Whisper + sanitizer
 
-Rather than feed Whisper the whole file, `transcribe_pipeline.py` slices the
-preprocessed WAV to each VAD speech span and transcribes those. This is faster
-and avoids Whisper hallucinating text over silence. Per-slice timestamps are
-offset back onto the original timeline by the span's start.
+`transcribe_pipeline.py` hands the whole preprocessed WAV to the
+`poc-transcription` module (from the hans-development branch): **MLX Whisper**
+transcribes it in **one pass**, sliding its own 30 s window across the file. This
+is deliberately *not* VAD-pre-sliced — full-file decoding conditions on previous
+text and yields more coherent long-form segment timestamps than cold-starting the
+decoder on each cut chunk.
 
-- Backend: **OpenAI Whisper** (PyTorch), on **MPS → CUDA → CPU** by preference,
-  with a per-slice CPU fallback if the accelerator chokes mid-run.
-- Default model: **`base`** (override with `TLDW_WHISPER_MODEL`, or per-request
-  via the `model` field). Loaded models are cached by `(name, device)`.
+A **hallucination sanitizer** (`audio_stt/sanitize.py`) then strips known decoder
+failure shapes before anything is returned — empty/zero-duration segments,
+duplicate-timestamp stalls, in-text character loops, and >8-segments/second
+density explosions — conservatively (when in doubt, keep the segment).
+
+- Backend: **MLX Whisper** (Apple-Silicon), single pass, `word_timestamps=True`.
+- Default model: **`turbo`** = `whisper-large-v3-turbo` (override with
+  `TLDW_WHISPER_MODEL` — a size like `base`/`small` or a full `mlx-community/…`
+  repo — or per-request via the `model` field). The model is cached after first
+  load; weights download on first use.
 
 ### 8. Scene building + hand-off to the highlighter
 
@@ -125,8 +133,10 @@ on disk, **500** if ffmpeg / preprocessing / Whisper fails (the reason is includ
 | Denoising | **DeepFilterNet** (`deepfilterlib`) | adaptive; optional — degrades to a no-op pass-through if absent |
 | Loudness | **pyloudnorm** (EBU R128) | measured after denoise, before VAD |
 | Voice-activity detection | **Silero VAD** | via `torch.hub`, cached after first call |
-| Speech-to-text | **OpenAI Whisper** (`base`, `word_timestamps=True`) | `TLDW_WHISPER_MODEL` env / `model` request field |
-| Compute device | MPS → CUDA → CPU | with per-slice CPU fallback |
+| Speech-to-text | **MLX Whisper** (`turbo`, single-pass, `word_timestamps=True`) | `TLDW_WHISPER_MODEL` env / `model` request field |
+| Hallucination sanitizer | heuristic passes (`audio_stt/sanitize.py`) | drops empty / stalled / looped / density-explosion segments |
+| Soft subtitles | **`.srt`** sidecar per clip (`poc-subtitles`) | alongside the burned-in karaoke; uses the `srt` library |
+| Compute device | Apple-Silicon (MLX) | MLX Whisper is Apple-Silicon only |
 
 - The pipeline is **lazily imported** on the first `/transcribe` call
   (`_load_transcriber()`), so `/highlight` startup is unaffected — torchaudio and
@@ -141,10 +151,12 @@ on disk, **500** if ffmpeg / preprocessing / Whisper fails (the reason is includ
   works, but burning captions needs the `subtitles` filter. Without libass the
   export succeeds *without* captions and the app says so; install an ffmpeg built
   with libass (e.g. the full Homebrew formula) to enable them.
-- **PyTorch Whisper only** — the PoC's `run_whisper.py` also has an MLX backend
-  (faster on Apple Silicon); the backend wrapper currently wires only OpenAI.
+- **Apple-Silicon only** — MLX Whisper needs Apple Silicon; there's no CPU/CUDA
+  fallback wired (the old OpenAI path was removed in favour of hans's approach).
 - **Whole-file transcode per request** — no caching of the preprocessed WAV, so
-  re-transcribing the same file redoes extraction + VAD.
+  re-transcribing the same file redoes extraction + preprocessing.
+- **Transcription accuracy is measurable** — `poc-transcription/eval` (WER/CER via
+  `jiwer`) is available as a standalone harness but isn't wired into the app.
 - **No contextual emoji** — the PoC's per-clip emoji (`generate_emoji_for_text`,
   Llama 3.2 3B via `mlx_lm`) is intentionally not wired, to avoid the heavy LLM
   dependency; `generate_ass_file` is called with an empty emoji.

@@ -14,10 +14,13 @@ opencv-python    # Haar face + mouth frame-diff for the blooper lip check
 # Blooper detection also needs ffmpeg on PATH (`brew install ffmpeg`);
 # Silero VAD itself is fetched at runtime via torch.hub (no pip package).
 
-# ── Transcription (/transcribe: audio_preprocessor → VAD-guided Whisper) ──────
-torchaudio       # load the preprocessed WAV for VAD-guided Whisper slicing
-openai-whisper   # speech-to-text; model weights download on first /transcribe
+# ── Transcription (/transcribe: audio_preprocessor → single-pass MLX Whisper) ──
+mlx-whisper      # Apple-Silicon single-pass Whisper STT (hans-development approach)
+torchaudio       # audio I/O for the preprocessing/transcription pipeline
 pyloudnorm       # EBU R128 loudness normalisation stage of the preprocessor
+srt              # write soft .srt subtitle sidecars alongside exported clips
+jiwer            # WER/CER scoring for the standalone transcription eval harness
+# openai-whisper # (superseded by mlx-whisper; kept out of the default install)
 # Optional, heavy: real neural denoising (the pipeline degrades to a no-op pass-
 # through without it, so it's not required). Install with: pip install deepfilterlib
 # deepfilterlib

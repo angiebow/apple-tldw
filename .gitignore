@@ -81,6 +81,15 @@ poc-blooper-detector/input/*
 poc-blooper-detector/out/*
 !poc-blooper-detector/out/.gitkeep
 
+# ── Audio / transcription / subtitles — source media & generated output ──
+poc-audio-extraction/input/
+poc-audio-extraction/output/
+poc-transcription/notebooks/
+poc-transcription/input/
+poc-transcription/output/
+poc-subtitles/input/
+poc-subtitles/output/
+
 # Server logs / runtime artifacts
 *.log
 

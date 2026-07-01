@@ -163,8 +163,15 @@ poc-content-highlighter/        Steps 4–5 — virality detector + reranker
 
 poc-audio-extraction/           Raw recording → transcript (feeds the highlighter)
   audio_preprocessor/             ffmpeg extract → denoise → normalise → Silero VAD
-  transcribe_pipeline.py          VAD-guided Whisper STT → transcript text
+  transcribe_pipeline.py          preprocess + single-pass MLX Whisper → transcript
   run_pipeline.py / run_whisper.py  standalone CLI drivers for the PoC
+
+poc-transcription/              Single-pass MLX Whisper STT (hans-development)
+  audio_stt/                      transcriber + hallucination sanitizer + models
+  eval/                           WER/CER accuracy harness (jiwer) — standalone
+
+poc-subtitles/                  Soft .srt subtitles from word timestamps
+  subtitles/                      cue builder · time rebase · srt writer
 
 poc-video-clipper/              Ranked spans → cut .mp4 Shorts
   cut_viral_clips.py              ffmpeg cut → 1080×1920 portrait clip (blurred fill bg)
