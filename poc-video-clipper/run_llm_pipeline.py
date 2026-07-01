@@ -4,10 +4,11 @@ run_llm_pipeline.py
 ===================
 Pipeline terpadu satu pintu (End-to-End) untuk memproses video podcast mentah:
 1. Mengekstrak & membersihkan audio (Denoise + AGC + VAD).
-2. Melakukan transkripsi Whisper STT secara akurat.
+2. Melakukan transkripsi Whisper STT dengan Word-Level Timestamps.
 3. Menganalisis topik & memisah adegan secara tata bahasa (durasi >= 10 detik).
 4. Menilai relevansi & viralitas adegan menggunakan Llama 3.2 3B.
-5. Memotong video fisik (Combined, Relevancy, Virality) dengan audio bersih secara otomatis.
+5. Memotong video fisik ke format Portrait 9:16 dengan video blur adaptif,
+   emoji kontekstual, dan subtitle ASS karaoke per kata (box merah) secara otomatis.
 """
 
 import os
@@ -49,6 +50,7 @@ class Segment:
     start: float
     end: float
     text: str
+    words: List[Dict[str, Any]] = None
 
 @dataclass
 class Scene:
@@ -142,60 +144,6 @@ def get_mlx_model_path(model_name: str) -> str:
     return mapping.get(model_name.lower(), f"mlx-community/whisper-{model_name}-mlx")
 
 # ─────────────────────────────────────────────────────────────────────────── #
-# Fungsi Pemotongan Video Fisik                                                #
-# ─────────────────────────────────────────────────────────────────────────── #
-
-def cut_category(video_path: str, clean_audio_path: str, clips_data: list, category_name: str, base_output_dir: str):
-    """
-    Memotong adegan untuk kategori tertentu dan menggabungkan audio bersih jika tersedia.
-    """
-    category_dir = os.path.join(base_output_dir, category_name)
-    os.makedirs(category_dir, exist_ok=True)
-    
-    use_clean_audio = clean_audio_path and os.path.exists(clean_audio_path)
-    
-    for idx, clip in enumerate(clips_data, 1):
-        start = clip["start"]
-        end = clip["end"]
-        duration = round(end - start, 2)
-        
-        # Penamaan berkas yang aman
-        clean_text = "".join([c if c.isalnum() or c in " _-" else "" for c in clip["text"][:30]]).strip()
-        clean_text = clean_text.replace(" ", "_")
-        
-        output_filename = f"clip_{idx:02d}_{start:.1f}s_{clean_text}.mp4"
-        output_path = os.path.join(category_dir, output_filename)
-        
-        print(f"   ➜ [{idx}/{len(clips_data)}] {start:.1f}s ➜ {end:.1f}s ({duration:.1f}s) 💾 {output_filename}")
-        
-        if use_clean_audio:
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", str(start), "-i", video_path,
-                "-ss", str(start), "-i", clean_audio_path,
-                "-t", str(duration),
-                "-map", "0:v",
-                "-map", "1:a",
-                "-c:v", "libx264",
-                "-c:a", "aac",
-                output_path
-            ]
-        else:
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", str(start), "-i", video_path,
-                "-t", str(duration),
-                "-c:v", "libx264",
-                "-c:a", "aac",
-                output_path
-            ]
-            
-        try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except subprocess.CalledProcessError as e:
-            print(f"   ❌ Gagal memotong klip {idx}: {e}")
-
-# ─────────────────────────────────────────────────────────────────────────── #
 # Pipeline Eksekusi Utama                                                      #
 # ─────────────────────────────────────────────────────────────────────────── #
 
@@ -216,7 +164,6 @@ def run_full_clipper_pipeline():
         print("  ❌ File video tidak ditemukan! Silakan coba kembali.")
         
     video_stem = Path(video_path).stem
-    # Kunci output folder di dalam folder script secara absolut
     output_dir = os.path.join(SCRIPT_DIR, "output")
     os.makedirs(output_dir, exist_ok=True)
     
@@ -260,8 +207,8 @@ def run_full_clipper_pipeline():
         
     print("✅ Preprocessing Audio Selesai dan berkas berhasil di-rename!")
     
-    # ── TAHAP II: TRANSKRIPSI WHISPER STT ──
-    print("\n⏳ [2/5] Memulai transkripsi suara dengan Whisper...")
+    # ── TAHAP II: TRANSKRIPSI WHISPER STT DENGAN WORD-LEVEL TIMESTAMPS ──
+    print("\n⏳ [2/5] Memulai transkripsi suara dengan Whisper (Word-Level Timestamps)...")
     has_mlx = False
     try:
         import mlx.core as mx
@@ -310,18 +257,28 @@ def run_full_clipper_pipeline():
             res = mlx_whisper.transcribe(
                 segment_audio.astype("float32"),
                 path_or_hf_repo=mlx_model_path,
-                word_timestamps=False,
+                word_timestamps=True,  # Nyalakan Word-Level Timestamps!
                 verbose=False
             )
         else:
-            res = model.transcribe(segment_audio, word_timestamps=False, fp16=False)
+            res = model.transcribe(segment_audio, word_timestamps=True, fp16=False)
             
         for s in res.get("segments", []):
+            # Hitung timestamps absolut per kata terhadap video asli
+            words_data = []
+            for w in s.get("words", []):
+                words_data.append({
+                    "word": w["word"],
+                    "start": round(start_time + w["start"], 3),
+                    "end": round(start_time + w["end"], 3)
+                })
+                
             global_segments.append({
                 "id": segment_id,
                 "start": round(start_time + s["start"], 3),
                 "end": round(start_time + s["end"], 3),
-                "text": s["text"].strip()
+                "text": s["text"].strip(),
+                "words": words_data
             })
             segment_id += 1
             
@@ -337,8 +294,15 @@ def run_full_clipper_pipeline():
     embedding_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2", device=device)
     
     # Parse transcript
+    scenes = []
     segments = [
-        Segment(id=s["id"], start=s["start"], end=s["end"], text=s["text"]) 
+        Segment(
+            id=s["id"], 
+            start=s["start"], 
+            end=s["end"], 
+            text=s["text"],
+            words=s.get("words", [])
+        ) 
         for s in global_segments
     ]
     
@@ -421,7 +385,6 @@ def run_full_clipper_pipeline():
     if current_group:
         scene_groups.append(current_group)
         
-    scenes = []
     for group in scene_groups:
         split_groups = split_scene_recursive(group, embeddings_map, max_duration=60.0)
         for split_group in split_groups:
@@ -547,26 +510,86 @@ def run_full_clipper_pipeline():
         
     print("✅ Berkas JSON Rankings Terbit!")
 
-    # ── TAHAP V: ACCURATE VIDEO CLIPPING ──
-    print("\n⏳ [5/5] Memulai pemotongan klip video fisik...")
-    # Kunci output_clips folder di dalam folder script secara absolut
+    # ── TAHAP V: ACCURATE PORTRAIT VIDEO CLIPPING DENGAN DYNAMIC SUBTITLE ──
+    print("\n⏳ [5/5] Memulai pemotongan klip video fisik & rendering subtitle...")
     output_clips_dir = os.path.join(SCRIPT_DIR, "output_clips")
     
-    # Combined
-    print("\n📁 Memotong Kategori: COMBINED")
-    cut_category(video_path, clean_audio_path, by_combined, "combined", output_clips_dir)
+    import subtitle_generator
     
-    # Relevancy
-    print("\n📁 Memotong Kategori: RELEVANCY")
-    cut_category(video_path, clean_audio_path, by_relevancy, "relevancy", output_clips_dir)
-    
-    # Virality
-    print("\n📁 Memotong Kategori: VIRALITY")
-    cut_category(video_path, clean_audio_path, by_virality, "virality", output_clips_dir)
+    # Fungsi pembungkus untuk memotong video dengan subtitle dinamis & portrait blur
+    def process_and_cut_category(clips_data: list, category_name: str):
+        category_dir = os.path.join(output_clips_dir, category_name)
+        os.makedirs(category_dir, exist_ok=True)
+        
+        print(f"\n🎬 Memproses {len(clips_data)} adegan untuk kategori: '{category_name.upper()}'")
+        for idx, clip in enumerate(clips_data, 1):
+            start = clip["start"]
+            end = clip["end"]
+            duration = round(end - start, 2)
+            
+            # Cari adegan (Scene) asli di data scenes yang sesuai timestamps untuk mengambil list sentences (words)
+            matching_scene = None
+            for sc in scenes:
+                if abs(sc.start - start) < 0.1 and abs(sc.end - end) < 0.1:
+                    matching_scene = sc
+                    break
+                    
+            if not matching_scene:
+                # Fallback jika adegan tidak ditemukan
+                sentences_data = [{"text": clip["text"], "start": start, "end": end, "words": []}]
+            else:
+                # Konversi list Segment dataclass ke format raw dict list
+                sentences_data = []
+                for s in matching_scene.sentences:
+                    sentences_data.append({
+                        "text": s.text,
+                        "start": s.start,
+                        "end": s.end,
+                        "words": s.words
+                    })
+            
+            # 1. Cari emoji dinamis dari Llama 3.2 3B
+            print(f"   ➜ [{idx}/{len(clips_data)}] Menganalisis emoji untuk: \"{clip['text'][:40]}...\"")
+            emoji = subtitle_generator.generate_emoji_for_text(clip["text"], pegasus_model, pegasus_tokenizer)
+            
+            # 2. Buat file ASS dinamis
+            ass_filename = f"temp_clip_{category_name}_{idx}.ass"
+            ass_path = os.path.join(output_dir, ass_filename)
+            subtitle_generator.generate_ass_file(start, end, sentences_data, emoji, ass_path)
+            
+            # 3. Render video portrait + blur + subs via FFmpeg
+            clean_text = "".join([c if c.isalnum() or c in " _-" else "" for c in clip["text"][:30]]).strip()
+            clean_text = clean_text.replace(" ", "_")
+            output_filename = f"clip_{idx:02d}_{start:.1f}s_{clean_text}.mp4"
+            output_path = os.path.join(category_dir, output_filename)
+            
+            print(f"      💾 Rendering video vertikal 9:16 dengan Subtitle & Emoji...")
+            success = subtitle_generator.render_portrait_video_with_subs(
+                video_path,
+                clean_audio_path,
+                start,
+                duration,
+                ass_path,
+                output_path
+            )
+            
+            # Hapus file ASS sementara setelah selesai digunakan
+            if os.path.exists(ass_path):
+                os.remove(ass_path)
+                
+            if success:
+                print("      ✅ Berhasil dirender!")
+            else:
+                print("      ❌ Gagal merender video.")
+
+    # Jalankan pemrosesan video untuk ketiga kategori
+    process_and_cut_category(by_combined, "combined")
+    process_and_cut_category(by_relevancy, "relevancy")
+    process_and_cut_category(by_virality, "virality")
     
     print("\n" + "=" * 60)
     print("  🎉 ALL PIPELINE PROCESSES COMPLETED SUCCESSFULLY!")
-    print(f"  📂 Klip Video Tersimpan di: {output_clips_dir}/")
+    print(f"  📂 Klip Video Portrait 9:16 Tersimpan di: {output_clips_dir}/")
     print("=" * 60 + "\n")
 
 if __name__ == "__main__":
