@@ -568,6 +568,9 @@ private struct EditorView: View {
     /// (in the clip-strip coordinate space) driving its follow-the-cursor offset.
     @State private var draggingID: Int?
     @State private var dragX: CGFloat = 0
+    /// Same, for the blooper lane below (reordered independently).
+    @State private var draggingBlooperID: Int?
+    @State private var bloopDragX: CGFloat = 0
 
     // Detected blooper (dead-air) spans, surfaced into the same timeline sequence.
     @State private var bloopers: [BlooperSpan] = []
@@ -805,6 +808,46 @@ private struct EditorView: View {
                 }
             }
             .onEnded { _ in draggingID = nil }
+    }
+
+    /// Name of the coordinate space the blooper drag reads its pointer x from.
+    private static let bloopStripSpace = "bloopStrip"
+
+    /// Center x of the blooper at `index` in the current blooper-lane layout.
+    private func bloopCenterX(_ index: Int) -> CGFloat {
+        var x: CGFloat = 0
+        for i in 0..<index { x += bloopWidth(bloopers[i]) + Self.clipGap }
+        return x + bloopWidth(bloopers[index]) / 2
+    }
+
+    /// Which blooper slot the pointer at `x` (blooper-strip space) hovers over.
+    private func bloopTargetIndex(x: CGFloat) -> Int {
+        var acc: CGFloat = 0
+        for (i, b) in bloopers.enumerated() {
+            let w = bloopWidth(b)
+            if x < acc + w / 2 { return i }
+            acc += w + Self.clipGap
+        }
+        return max(0, bloopers.count - 1)
+    }
+
+    /// Interactive drag for the blooper lane — mirrors `clipDrag`, but reorders the
+    /// local `bloopers` state directly (no parent binding needed).
+    private func blooperDrag(_ span: BlooperSpan) -> some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.bloopStripSpace))
+            .onChanged { value in
+                if draggingBlooperID == nil { draggingBlooperID = span.id }
+                guard draggingBlooperID == span.id else { return }
+                bloopDragX = value.location.x
+                let target = bloopTargetIndex(x: bloopDragX)
+                if let cur = bloopers.firstIndex(where: { $0.id == span.id }), target != cur {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        bloopers.move(fromOffsets: IndexSet(integer: cur),
+                                      toOffset: target > cur ? target + 1 : target)
+                    }
+                }
+            }
+            .onEnded { _ in draggingBlooperID = nil }
     }
 
     private var topBar: some View {
@@ -1088,8 +1131,8 @@ private struct EditorView: View {
                     // Blooper lane — separate sequence below the transcript clips.
                     if !bloopers.isEmpty {
                         LaneLabel(text: "Bloopers")
-                        HStack(spacing: 2) {
-                            ForEach(bloopers) { span in
+                        HStack(spacing: EditorView.clipGap) {
+                            ForEach(Array(bloopers.enumerated()), id: \.element.id) { index, span in
                                 BlooperTimelineClip(span: span,
                                                     width: bloopWidth(span),
                                                     isCurrent: selection == .blooper(span.id),
@@ -1104,8 +1147,17 @@ private struct EditorView: View {
                                                             stopSpan()
                                                         }
                                                     })
+                                    // Interactive reorder, matching the transcript lane.
+                                    .offset(x: draggingBlooperID == span.id ? bloopDragX - bloopCenterX(index) : 0)
+                                    .scaleEffect(draggingBlooperID == span.id ? 1.06 : 1)
+                                    .shadow(color: .black.opacity(draggingBlooperID == span.id ? 0.4 : 0),
+                                            radius: 6, y: 3)
+                                    .zIndex(draggingBlooperID == span.id ? 1 : 0)
+                                    .gesture(blooperDrag(span))
                             }
                         }
+                        .coordinateSpace(name: EditorView.bloopStripSpace)
+                        .animation(.easeInOut(duration: 0.18), value: bloopers.map(\.id))
                     }
                     WaveformTrack(width: contentWidth)
                 }
