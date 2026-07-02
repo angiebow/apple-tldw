@@ -289,7 +289,7 @@ struct ContentView: View {
             }
         }
         .sheet(item: $detailLine) { line in
-            ShortDetailView(line: line, category: category)
+            ShortDetailView(line: line, category: category, sourceVideoURL: model.sourceVideoURL)
         }
     }
 
@@ -496,30 +496,66 @@ private struct ShortCard: View {
 private struct ShortDetailView: View {
     let line: LineScore
     let category: ContentView.Category
+    /// The source recording this line was transcribed from — used to preview the
+    /// line's exact [start, end] span. nil for pasted transcripts (no timecodes).
+    let sourceVideoURL: URL?
     @Environment(\.dismiss) private var dismiss
+
+    @State private var player = AVPlayer()
+    @State private var endObserver: Any?
+    @State private var loaded = false
+
+    /// True when this line carries a real span we can cut from the recording.
+    private var hasClip: Bool {
+        guard let s = line.start, let e = line.end else { return false }
+        return e > s && sourceVideoURL != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            // Video clip preview — placeholder until the audio/cut step exists.
-            ZStack {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6]))
-                    .foregroundStyle(.quaternary)
-                VStack(spacing: 8) {
-                    Image(systemName: "play.rectangle.fill")
-                        .font(.system(size: 46))
-                        .foregroundStyle(.secondary)
-                    Text("Video clip preview")
-                        .font(.headline).foregroundStyle(.secondary)
-                    Text("Generated once the audio extraction & cutting step is wired up")
-                        .font(.caption).foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
+            // Video clip preview — the line's real span played from the recording.
+            Group {
+                if hasClip {
+                    ZStack(alignment: .bottom) {
+                        VideoPlayer(player: player).background(Color.black)
+                        HStack(spacing: 8) {
+                            if let s = line.start, let e = line.end {
+                                Text("\(timecode(s)) – \(timecode(e)) · \(String(format: "%.1fs", e - s))")
+                                    .monospacedDigit()
+                            }
+                            Spacer()
+                            Button { playSpan() } label: { Label("Replay", systemImage: "arrow.clockwise") }
+                                .buttonStyle(.borderless)
+                        }
+                        .font(.caption.weight(.medium)).foregroundStyle(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(.black.opacity(0.55))
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6]))
+                            .foregroundStyle(.quaternary)
+                        VStack(spacing: 8) {
+                            Image(systemName: "play.rectangle.fill")
+                                .font(.system(size: 46))
+                                .foregroundStyle(.secondary)
+                            Text("No source footage")
+                                .font(.headline).foregroundStyle(.secondary)
+                            Text("This line has no timecodes — drop in a recording to preview real footage")
+                                .font(.caption).foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding()
+                    }
                 }
-                .padding()
             }
             .frame(height: 220)
+            .onAppear { if hasClip { loadAndPlay() } }
+            .onDisappear { stopObserver(); player.pause() }
 
             // Full line text.
             ScrollView {
@@ -563,6 +599,37 @@ private struct ShortDetailView: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
         .background(Color.secondary.opacity(0.15), in: Capsule())
+    }
+
+    private func timecode(_ s: Double) -> String {
+        let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
+    }
+
+    /// Load the recording (once) and play the line's span.
+    private func loadAndPlay() {
+        guard let url = sourceVideoURL else { return }
+        if !loaded {
+            player.replaceCurrentItem(with: AVPlayerItem(url: url))
+            loaded = true
+        }
+        playSpan()
+    }
+
+    /// Seek to the line's [start, end] and play only that range.
+    private func playSpan() {
+        guard let s = line.start, let e = line.end, e > s else { return }
+        if !loaded { loadAndPlay(); return }
+        stopObserver()
+        player.pause()
+        player.seek(to: CMTime(seconds: s, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero) { _ in player.play() }
+        endObserver = player.addBoundaryTimeObserver(
+            forTimes: [NSValue(time: CMTime(seconds: e, preferredTimescale: 600))], queue: .main
+        ) { [weak player] in player?.pause() }
+    }
+
+    private func stopObserver() {
+        if let endObserver { player.removeTimeObserver(endObserver); self.endObserver = nil }
     }
 }
 
