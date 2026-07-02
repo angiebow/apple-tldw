@@ -610,6 +610,8 @@ private struct EditorView: View {
     @State private var selection: Selection?
     @State private var marked: Set<Selection> = []   // clips ticked for merging
     @State private var showMergePreview = false
+    /// Transient note shown when a merge-mark switches kinds (bloopers ↔ transcript).
+    @State private var mergeModeNote: String?
     /// The transcript clip being interactively dragged, and the live pointer x
     /// (in the clip-strip coordinate space) driving its follow-the-cursor offset.
     @State private var draggingID: Int?
@@ -854,8 +856,40 @@ private struct EditorView: View {
         }
     }
 
+    private func isSentence(_ s: Selection) -> Bool {
+        if case .sentence = s { return true }; return false
+    }
+
+    /// Noun for the Merge button — reflects the single kind currently marked.
+    private var markedKindLabel: String {
+        marked.contains(where: { !isSentence($0) }) ? "blooper" : "clip"
+    }
+
+    /// Toggle a clip's merge mark. A merge can only contain one kind — transcript
+    /// clips *or* bloopers (each with their backsong) — never both, so marking the
+    /// opposite kind clears the current selection and switches mode.
     private func toggleMark(_ key: Selection) {
-        if marked.contains(key) { marked.remove(key) } else { marked.insert(key) }
+        if marked.contains(key) {
+            marked.remove(key)
+            return
+        }
+        let addingSentence = isSentence(key)
+        if marked.contains(where: { isSentence($0) != addingSentence }) {
+            marked = marked.filter { isSentence($0) == addingSentence }
+            flashMergeNote(addingSentence
+                ? "Switched to transcript clips — they can’t be merged with bloopers."
+                : "Switched to bloopers — they can’t be merged with transcript clips.")
+        }
+        marked.insert(key)
+    }
+
+    /// Briefly surface why the merge selection changed kinds.
+    private func flashMergeNote(_ text: String) {
+        mergeModeNote = text
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            mergeModeNote = nil
+        }
     }
 
     /// Name of the coordinate space the clip drag reads its pointer x from.
@@ -1240,10 +1274,15 @@ private struct EditorView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Text("Timeline").font(.callout.weight(.semibold)).foregroundStyle(.white)
+                if let note = mergeModeNote {
+                    Text(note)
+                        .font(.caption2).foregroundStyle(.yellow)
+                        .lineLimit(1).transition(.opacity)
+                }
                 Spacer()
                 if !marked.isEmpty {
                     Button { showMergePreview = true } label: {
-                        Label("Merge \(marked.count) clip\(marked.count == 1 ? "" : "s")",
+                        Label("Merge \(marked.count) \(markedKindLabel)\(marked.count == 1 ? "" : "s")",
                               systemImage: "rectangle.stack.badge.play")
                     }
                     .buttonStyle(.borderedProminent)
@@ -1309,6 +1348,30 @@ private struct EditorView: View {
                         }
                         .coordinateSpace(name: EditorView.bloopStripSpace)
                         .animation(.easeInOut(duration: 0.18), value: bloopers.map(\.id))
+                    }
+                    // Backsound lane — generated music beds, each tile aligned
+                    // under the clip it belongs to (blank gap where a clip has none).
+                    if !bedByClip.isEmpty {
+                        LaneLabel(text: "Backsound")
+                        HStack(spacing: EditorView.clipGap) {
+                            ForEach(clips) { clip in
+                                if let bed = bedByClip[clip.id] {
+                                    BacksoundTimelineClip(
+                                        bed: bed,
+                                        volume: bedVolume(clip.id),
+                                        width: clipWidth(clip),
+                                        isCurrent: selection == .sentence(clip.id),
+                                        onSelect: { selectSentence(clip) },
+                                        onRemove: {
+                                            bedByClip[clip.id] = nil
+                                            bedVolumeByClip[clip.id] = nil
+                                            if selection == .sentence(clip.id) { stopBed() }
+                                        })
+                                } else {
+                                    Color.clear.frame(width: clipWidth(clip), height: 44)
+                                }
+                            }
+                        }
                     }
                     WaveformTrack(width: contentWidth)
                 }
@@ -1388,6 +1451,47 @@ private struct TimelineClip: View {
         .overlay(alignment: .topLeading) { MarkToggle(isMarked: isMarked, onMark: onMark) }
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
+    }
+}
+
+/// A generated music bed shown as a tile in the Backsound lane, sized to match
+/// the clip it scores and showing its mood + volume. Tapping selects the clip.
+private struct BacksoundTimelineClip: View {
+    let bed: BacksoundResponse
+    let volume: Double
+    let width: CGFloat
+    let isCurrent: Bool
+    let onSelect: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "music.note").font(.system(size: 11, weight: .bold))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(bed.emotion).font(.system(size: 9, weight: .semibold)).lineLimit(1)
+                Text("\(Int((volume * 100).rounded()))% · \(String(format: "%.0fs", bed.durationS))")
+                    .font(.system(size: 8)).opacity(0.85).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .frame(width: width, height: 44, alignment: .leading)
+        .background(Color.purple.opacity(0.85), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .stroke(isCurrent ? Color.white : Color.white.opacity(0.15),
+                    lineWidth: isCurrent ? 2 : 1))
+        .overlay(alignment: .topTrailing) {
+            Button { onRemove() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.white, .black.opacity(0.5))
+            }
+            .buttonStyle(.plain).padding(2)
+            .help("Remove this music bed")
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+        .help("\(bed.emotion) bed · \(Int((volume * 100).rounded()))% — tap to select this clip")
     }
 }
 
