@@ -521,6 +521,10 @@ class ClipSpan(BaseModel):
     start: float
     end: float
     text: str = ""
+    # Optional per-clip background music bed (base64 WAV from /backsound), mixed
+    # under the speech at `music_volume` (0–1) when present.
+    music_b64: Optional[str] = None
+    music_volume: float = 0.35
 
 
 class ClipRequest(BaseModel):
@@ -734,7 +738,8 @@ def clip(req: ClipRequest):
     def words_in(a: float, b: float) -> list:
         return [w for w in all_words if w["start"] < b and w["end"] > a]
 
-    spans = [{"start": c.start, "end": c.end, "text": c.text, "words": words_in(c.start, c.end)}
+    spans = [{"start": c.start, "end": c.end, "text": c.text, "words": words_in(c.start, c.end),
+              "music_b64": c.music_b64, "music_volume": c.music_volume}
              for c in req.clips if c.end > c.start]
     if not spans:
         raise HTTPException(status_code=400, detail="No valid clip spans to cut.")
@@ -807,7 +812,8 @@ def merge(req: MergeRequest):
     def words_in(a: float, b: float) -> list:
         return [w for w in all_words if w["start"] < b and w["end"] > a]
 
-    spans = [{"start": c.start, "end": c.end, "text": c.text, "words": words_in(c.start, c.end)}
+    spans = [{"start": c.start, "end": c.end, "text": c.text, "words": words_in(c.start, c.end),
+              "music_b64": c.music_b64, "music_volume": c.music_volume}
              for c in req.clips if c.end > c.start]
     if not spans:
         raise HTTPException(status_code=400, detail="No valid clip spans to merge.")

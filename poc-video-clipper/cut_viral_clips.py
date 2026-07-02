@@ -12,6 +12,7 @@ Penggunaan:
 import os
 import sys
 import json
+import base64
 import shutil
 import subprocess
 import tempfile
@@ -141,39 +142,67 @@ def _safe_name(text: str) -> str:
     return clean.replace(" ", "_") or "clip"
 
 
+def _ass_escape(ass_path: str) -> str:
+    """Escape a path for use inside ffmpeg's ``subtitles=`` filter argument."""
+    return ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
 def _render(video_path: str, clean_audio_path, start: float, duration: float,
-            output_path: str, vertical: bool, ass_path=None) -> None:
+            output_path: str, vertical: bool, ass_path=None,
+            music_path=None, music_volume: float = 0.35) -> None:
     """Re-encode one span. Vertical → 1080×1920 portrait with a blurred fill
-    background; ass_path (if given) burns the karaoke subtitles on top."""
+    background; ass_path (if given) burns the karaoke subtitles on top; music_path
+    (if given) is looped and mixed under the original audio at ``music_volume``."""
     use_clean = bool(clean_audio_path) and os.path.exists(clean_audio_path)
 
     cmd = ["ffmpeg", "-y", "-ss", str(start), "-i", video_path]
     if use_clean:
         cmd += ["-ss", str(start), "-i", clean_audio_path]
+    if music_path:
+        # Loop the (short) bed so it covers the whole clip; -t below trims it.
+        cmd += ["-stream_loop", "-1", "-i", music_path]
     cmd += ["-t", str(duration)]
 
+    src_audio = "1:a" if use_clean else "0:a"          # original speech track
+    music_idx = (2 if use_clean else 1) if music_path else None
+
+    chains: list[str] = []
+
+    # ── Video chain → [outv] (or a plain map when no video filter is needed) ──
     if vertical:
         # Blurred, stretched copy as the 9:16 background; the original scaled to
         # width sits centred on top; optional subtitles burned over the canvas.
-        graph = ("[0:v]scale=1080:1920,boxblur=20:10[bg];"
-                 "[0:v]scale=1080:-1[fg];"
-                 "[bg][fg]overlay=(W-w)/2:(H-h)/2")
+        vgraph = ("[0:v]scale=1080:1920,boxblur=20:10[bg];"
+                  "[0:v]scale=1080:-1[fg];"
+                  "[bg][fg]overlay=(W-w)/2:(H-h)/2")
         if ass_path:
-            esc = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-            graph += f",subtitles='{esc}'"
-        graph += ",scale=1080:1920[outv]"
-        cmd += ["-filter_complex", graph, "-map", "[outv]",
-                "-map", "1:a" if use_clean else "0:a",
-                "-c:v", "libx264", "-c:a", "aac", "-s", "1080x1920", output_path]
+            vgraph += f",subtitles='{_ass_escape(ass_path)}'"
+        vgraph += ",scale=1080:1920[outv]"
+        chains.append(vgraph)
+        video_map = ["-map", "[outv]"]
     elif ass_path:
         # Landscape, but still burn the karaoke captions over the original frame.
-        esc = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        cmd += ["-filter_complex", f"[0:v]subtitles='{esc}'[outv]", "-map", "[outv]",
-                "-map", "1:a" if use_clean else "0:a",
-                "-c:v", "libx264", "-c:a", "aac", output_path]
+        chains.append(f"[0:v]subtitles='{_ass_escape(ass_path)}'[outv]")
+        video_map = ["-map", "[outv]"]
     else:
-        cmd += ["-map", "0:v", "-map", "1:a"] if use_clean else []
-        cmd += ["-c:v", "libx264", "-c:a", "aac", output_path]
+        video_map = ["-map", "0:v"]
+
+    # ── Audio chain → [aout] (mix the bed under the speech) or a plain map ──
+    if music_path:
+        # normalize=0 keeps the speech at full level and the bed at music_volume,
+        # instead of amix's default equal-power attenuation of both inputs.
+        chains.append(f"[{music_idx}:a]volume={music_volume}[bed];"
+                      f"[{src_audio}][bed]amix=inputs=2:duration=first:normalize=0[aout]")
+        audio_map = ["-map", "[aout]"]
+    else:
+        audio_map = ["-map", src_audio]
+
+    if chains:
+        cmd += ["-filter_complex", ";".join(chains)]
+    cmd += video_map + audio_map + ["-c:v", "libx264", "-c:a", "aac"]
+    if vertical:
+        cmd += ["-s", "1080x1920"]
+    cmd.append(output_path)
 
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
@@ -240,8 +269,18 @@ def cut_clips(video_path: str, clips: list, output_dir: str,
                 subtitle_generator.generate_ass_file(start, end, sentences_data, "", ass_path,
                                                      vertical=vertical)
 
+            # Optional per-clip music bed (base64 WAV from /backsound), mixed
+            # under the speech at the clip's chosen volume.
+            music_path = None
+            if clip.get("music_b64"):
+                music_path = os.path.join(ass_dir, f"clip_{idx:02d}.wav")
+                with open(music_path, "wb") as mf:
+                    mf.write(base64.b64decode(clip["music_b64"]))
+
             _render(video_path, clean_audio_path, start, duration,
-                    output_path, vertical=vertical, ass_path=ass_path)
+                    output_path, vertical=vertical, ass_path=ass_path,
+                    music_path=music_path,
+                    music_volume=float(clip.get("music_volume", 0.35)))
             written.append(os.path.abspath(output_path))
 
     return written

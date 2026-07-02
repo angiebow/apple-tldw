@@ -268,25 +268,50 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             resultsHeader
             ScrollView {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 300), spacing: 18)],
-                    spacing: 18
-                ) {
-                    ForEach(Array(shownLines.enumerated()), id: \.element.id) { idx, line in
-                        ShortCard(rank: idx + 1, line: line, category: category,
-                                  isSelected: Binding(
-                                    get: { selectedOrder.contains(line.id) },
-                                    set: { toggleSelection(line.id, $0) }
-                                  ),
-                                  onOpen: { detailLine = line })
+                if shownLines.isEmpty {
+                    emptyResults
+                } else {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 300), spacing: 18)],
+                        spacing: 18
+                    ) {
+                        ForEach(Array(shownLines.enumerated()), id: \.element.id) { idx, line in
+                            ShortCard(rank: idx + 1, line: line, category: category,
+                                      isSelected: Binding(
+                                        get: { selectedOrder.contains(line.id) },
+                                        set: { toggleSelection(line.id, $0) }
+                                      ),
+                                      onOpen: { detailLine = line })
+                        }
                     }
+                    .padding(28)
                 }
-                .padding(28)
             }
         }
         .sheet(item: $detailLine) { line in
             ShortDetailView(line: line, category: category)
         }
+    }
+
+    /// Shown in the grid when the current category has nothing to show — either
+    /// none were detected, or the search filtered everything out.
+    private var emptyResults: some View {
+        let searching = !searchText.isEmpty
+        let noun = category == .viral ? "viral" : "relevant"
+        return VStack(spacing: 12) {
+            Image(systemName: searching ? "magnifyingglass" : "sparkles")
+                .font(.system(size: 42)).foregroundStyle(.secondary)
+            Text(searching ? "No \(noun) lines match your search"
+                           : "No \(noun) lines detected")
+                .font(.title3.weight(.medium))
+            Text(searching
+                 ? "Try a different search term, or clear the search."
+                 : "Nothing in this recording crossed the \(noun) threshold — try the other tab or another recording.")
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).frame(maxWidth: 420)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 80)
     }
 
     private var resultsHeader: some View {
@@ -611,7 +636,14 @@ private struct EditorView: View {
     @State private var bedGeneratingID: Int?
     @State private var bedError: String?
     @State private var player: AVAudioPlayer?
+    /// Per-clip bed volume (0–1), and the looping player that plays the bed in
+    /// sync with the clip preview.
+    @State private var bedVolumeByClip: [Int: Double] = [:]
+    @State private var bedPlayer: AVAudioPlayer?
     private let service = HighlightService()
+
+    private static let defaultBedVolume = 0.35
+    private func bedVolume(_ id: Int) -> Double { bedVolumeByClip[id] ?? Self.defaultBedVolume }
 
     /// The sentence clip the preview/controls act on (nil while a blooper is selected).
     private var currentClip: LineScore? {
@@ -635,10 +667,45 @@ private struct EditorView: View {
             defer { bedGeneratingID = nil }
             do {
                 bedByClip[clip.id] = try await service.generateBacksound(for: clip)
+                if bedVolumeByClip[clip.id] == nil { bedVolumeByClip[clip.id] = Self.defaultBedVolume }
+                // If this clip is the one on screen, start its bed right away.
+                if selection == .sentence(clip.id) { startBed(for: clip) }
             } catch {
                 bedError = error.localizedDescription
             }
         }
+    }
+
+    /// Loop the clip's generated bed under the preview at its chosen volume.
+    private func startBed(for clip: LineScore) {
+        stopBed()
+        guard let b64 = bedByClip[clip.id]?.audioB64,
+              let data = Data(base64Encoded: b64) else { return }
+        do {
+            let p = try AVAudioPlayer(data: data)
+            p.numberOfLoops = -1               // loop the short bed to cover the clip
+            p.volume = Float(bedVolume(clip.id))
+            p.play()
+            bedPlayer = p
+        } catch {
+            bedError = "Couldn't play the music bed: \(error.localizedDescription)"
+        }
+    }
+
+    private func stopBed() {
+        bedPlayer?.stop()
+        bedPlayer = nil
+    }
+
+    /// Live-updating binding for a clip's bed volume slider.
+    private func bedVolumeBinding(_ id: Int) -> Binding<Double> {
+        Binding(
+            get: { bedVolume(id) },
+            set: { v in
+                bedVolumeByClip[id] = v
+                if selection == .sentence(id) { bedPlayer?.volume = Float(v) }
+            }
+        )
     }
 
     private func playAudio(b64: String, onError: (String) -> Void) {
@@ -685,6 +752,7 @@ private struct EditorView: View {
         if let s = clip.start, let e = clip.end, e > s, sourceVideoURL != nil {
             load(sourceVideoURL)
             playSpan(start: s, end: e)
+            startBed(for: clip)   // plays only if this clip has a generated bed
         } else {
             stopSpan()
         }
@@ -700,6 +768,7 @@ private struct EditorView: View {
 
     private func stopSpan() {
         bigPlayer.pause()
+        stopBed()
         if let bigEndObserver { bigPlayer.removeTimeObserver(bigEndObserver); self.bigEndObserver = nil }
     }
 
@@ -737,7 +806,7 @@ private struct EditorView: View {
         if showMergePreview {
             MergePreviewView(items: mergeItems, videoURL: sourceVideoURL ?? blooperVideoURL,
                              segments: transcriptSegments, orientation: orientation,
-                             captionsOn: captionsOn,
+                             captionsOn: captionsOn, beds: bedByClip, bedVolumes: bedVolumeByClip,
                              onBack: { showMergePreview = false })
         } else {
             editorBody
@@ -928,8 +997,10 @@ private struct EditorView: View {
     /// Cut the exportable clips out of the source video, then reveal them in Finder.
     private func exportClips() {
         guard let url = sourceVideoURL else { return }
-        let spans = exportableClips.map {
-            ClipSpan(start: $0.start ?? 0, end: $0.end ?? 0, text: $0.text)
+        let spans = exportableClips.map { c in
+            ClipSpan(start: c.start ?? 0, end: c.end ?? 0, text: c.text,
+                     musicB64: bedByClip[c.id]?.audioB64,
+                     musicVolume: bedByClip[c.id] != nil ? bedVolume(c.id) : nil)
         }
         isExporting = true
         exportError = nil
@@ -1103,6 +1174,19 @@ private struct EditorView: View {
                     }
                 }
 
+                if bed != nil {
+                    HStack(spacing: 6) {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Slider(value: bedVolumeBinding(clip.id), in: 0...1)
+                            .frame(width: 120)
+                        Text("\(Int((bedVolume(clip.id) * 100).rounded()))%")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                    }
+                    .help("How loud the music bed sits under the clip — applies to both the preview and the export")
+                }
+
                 Spacer()
 
                 if bedGeneratingID == clip.id {
@@ -1116,9 +1200,10 @@ private struct EditorView: View {
 
                 if let bed {
                     Button { playAudio(b64: bed.audioB64) { bedError = $0 } } label: {
-                        Label("Play", systemImage: "play.fill")
+                        Label("Bed only", systemImage: "play.fill")
                     }
                     .buttonStyle(.borderedProminent)
+                    .help("Audition just the music bed")
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
@@ -1496,6 +1581,14 @@ private enum MergeClip: Identifiable {
     }
 }
 
+/// One clip's background-music window on the merged composition timeline.
+private struct BedSegment {
+    let start: Double
+    let end: Double
+    let b64: String
+    let volume: Float
+}
+
 /// "Next page" after picking clips to merge: concatenates the marked clips
 /// (transcript lines + blooper spans) into one composition, plays it, and can
 /// export the result to an .mp4 file.
@@ -1505,11 +1598,19 @@ private struct MergePreviewView: View {
     let segments: [TranscriptSegment]            // word times → karaoke captions
     let orientation: ShortOrientation            // landscape (as-is) or portrait (blur fill)
     let captionsOn: Bool                         // burn + preview karaoke captions
+    let beds: [Int: BacksoundResponse]           // per-sentence-clip music bed
+    let bedVolumes: [Int: Double]                // per-clip bed volume (0–1)
     let onBack: () -> Void
 
     @State private var player = AVPlayer()
     @State private var hasVideo = false
     @State private var captionWords: [TranscriptWord] = []   // remapped to composition time
+    /// Per-clip bed windows on the composition timeline, played by a synced
+    /// AVAudioPlayer (avoids AVComposition's deprecated synchronous track APIs).
+    @State private var bedSchedule: [BedSegment] = []
+    @State private var bedPlayer: AVAudioPlayer?
+    @State private var activeBedIndex: Int?
+    @State private var bedObserver: Any?
     @State private var buildError: String?
     @State private var isExporting = false
     @State private var exportError: String?
@@ -1531,8 +1632,11 @@ private struct MergePreviewView: View {
             Divider()
             storyboard
         }
-        .onAppear(perform: build)
-        .onDisappear { player.pause() }
+        .task { await build() }
+        .onDisappear {
+            player.pause()
+            stopBedSync()
+        }
         .alert("Couldn’t export the video",
                isPresented: Binding(get: { exportError != nil },
                                     set: { if !$0 { exportError = nil } })) {
@@ -1636,47 +1740,112 @@ private struct MergePreviewView: View {
     }
 
     /// Concatenate the marked clips (transcript lines + blooper spans, video+audio)
-    /// into one composition, in the order they were arranged.
-    private func build() {
+    /// into one composition, in the order they were arranged. Source tracks are
+    /// loaded async and inserted per composition track (the non-deprecated path).
+    private func build() async {
         guard let videoURL else { return }
         let asset = AVURLAsset(url: videoURL)
         let comp = AVMutableComposition()
         let allWords = segments.flatMap { $0.words ?? [] }
         var cursor = CMTime.zero
         var caps: [TranscriptWord] = []
+        var schedule: [BedSegment] = []
         do {
+            let srcVideo = try await asset.loadTracks(withMediaType: .video).first
+            let srcAudio = try await asset.loadTracks(withMediaType: .audio).first
+            let compVideo = comp.addMutableTrack(withMediaType: .video,
+                                                 preferredTrackID: kCMPersistentTrackID_Invalid)
+            let compAudio = comp.addMutableTrack(withMediaType: .audio,
+                                                 preferredTrackID: kCMPersistentTrackID_Invalid)
             for item in items {
                 guard let range = item.sourceRange else { continue }
+                let offset = cursor.seconds
                 // Remap this sentence's words from the source timeline onto the
                 // composition timeline (each item is appended at `cursor`).
                 if case .sentence(let c) = item, let s = c.start, let e = c.end {
-                    let offset = cursor.seconds
                     for w in allWords where w.start < e && w.end > s {
                         caps.append(TranscriptWord(word: w.word,
                                                    start: offset + (w.start - s),
                                                    end: offset + (w.end - s)))
                     }
+                    // Record this clip's bed window on the composition timeline;
+                    // a synced AVAudioPlayer plays it during that window.
+                    if let bed = beds[c.id] {
+                        schedule.append(BedSegment(start: offset, end: offset + range.duration.seconds,
+                                                   b64: bed.audioB64,
+                                                   volume: Float(bedVolumes[c.id] ?? 0.35)))
+                    }
                 }
-                try comp.insertTimeRange(range, of: asset, at: cursor)
+                if let srcVideo { try compVideo?.insertTimeRange(range, of: srcVideo, at: cursor) }
+                if let srcAudio { try compAudio?.insertTimeRange(range, of: srcAudio, at: cursor) }
                 cursor = cursor + range.duration
             }
             if cursor > .zero {
                 captionWords = caps
+                bedSchedule = schedule
                 player.replaceCurrentItem(with: AVPlayerItem(asset: comp))
                 hasVideo = true
-                player.seek(to: .zero)
+                await player.seek(to: .zero)
                 player.play()
+                startBedSync()
             }
         } catch {
             buildError = "Couldn't build the merge: \(error.localizedDescription)"
         }
     }
 
+    /// Drive the bed audio off the merge player's clock: whenever the playhead
+    /// enters a clip that has a bed, loop that bed under it at its chosen volume.
+    private func startBedSync() {
+        guard bedObserver == nil, !bedSchedule.isEmpty else { return }
+        bedObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
+        ) { time in updateBed(at: time.seconds) }
+    }
+
+    private func updateBed(at now: Double) {
+        guard let idx = bedSchedule.firstIndex(where: { now >= $0.start && now < $0.end }) else {
+            bedPlayer?.stop(); bedPlayer = nil; activeBedIndex = nil
+            return
+        }
+        if activeBedIndex != idx {
+            bedPlayer?.stop()
+            let seg = bedSchedule[idx]
+            if let data = Data(base64Encoded: seg.b64), let p = try? AVAudioPlayer(data: data) {
+                p.numberOfLoops = -1
+                p.volume = seg.volume
+                p.currentTime = (now - seg.start).truncatingRemainder(dividingBy: max(p.duration, 0.01))
+                p.play()
+                bedPlayer = p
+            }
+            activeBedIndex = idx
+        } else if player.timeControlStatus != .playing {
+            bedPlayer?.pause()
+        } else if bedPlayer?.isPlaying == false {
+            bedPlayer?.play()
+        }
+    }
+
+    private func stopBedSync() {
+        if let bedObserver { player.removeTimeObserver(bedObserver); self.bedObserver = nil }
+        bedPlayer?.stop(); bedPlayer = nil; activeBedIndex = nil
+    }
+
     /// Render the merged clips into one portrait (1080×1920) captioned Short via
     /// the backend, then reveal the written file in Finder.
     private func exportMerged() {
         guard let videoURL else { return }
-        let spans = items.compactMap { $0.clipSpan }
+        // Carry each sentence clip's generated bed into its span so the merged
+        // Short is mixed with the same music (at the chosen volume) as the preview.
+        let spans: [ClipSpan] = items.compactMap { item in
+            guard let span = item.clipSpan else { return nil }
+            if case .sentence(let c) = item, let bed = beds[c.id] {
+                return ClipSpan(start: span.start, end: span.end, text: span.text,
+                                musicB64: bed.audioB64,
+                                musicVolume: bedVolumes[c.id] ?? 0.35)
+            }
+            return span
+        }
         guard !spans.isEmpty else {
             exportError = "None of the selected clips have timecodes to cut."
             return

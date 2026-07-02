@@ -187,6 +187,25 @@ struct ClipSpan: Codable {
     let start: Double
     let end: Double
     let text: String
+    /// Optional per-clip background music bed (base64 WAV) mixed under the speech
+    /// at `musicVolume` (0–1). nil when the clip has no generated bed.
+    let musicB64: String?
+    let musicVolume: Double?
+
+    init(start: Double, end: Double, text: String,
+         musicB64: String? = nil, musicVolume: Double? = nil) {
+        self.start = start
+        self.end = end
+        self.text = text
+        self.musicB64 = musicB64
+        self.musicVolume = musicVolume
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case start, end, text
+        case musicB64 = "music_b64"
+        case musicVolume = "music_volume"
+    }
 }
 
 /// Request body for `POST /clip` — cut selected spans out of the source video.

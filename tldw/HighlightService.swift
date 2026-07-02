@@ -48,7 +48,7 @@ struct HighlightService {
 
         request.httpBody = try JSONEncoder().encode(
             HighlightRequest(text: text, topK: topK, title: title, segments: segments))
-
+ 
         let data: Data
         let response: URLResponse
         do {
