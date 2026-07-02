@@ -9,6 +9,7 @@ numpy
 scipy
 sentencepiece
 protobuf
+mlx-lm           # Apple-Silicon Llama 3.2 3B summarizer (/highlight step 1)
 soundfile        # audio I/O for the blooper detector's Silero VAD
 opencv-python    # Haar face + mouth frame-diff for the blooper lip check
 # Blooper detection also needs ffmpeg on PATH (`brew install ffmpeg`);

@@ -38,6 +38,7 @@ struct HighlightService {
     /// Run the highlighter pipeline and return the two ranked lists. Pass the
     /// transcribe `segments` to get timestamped results (spans the editor can cut).
     func highlight(_ text: String,
+                   title: String? = nil,
                    segments: [TranscriptSegment]? = nil,
                    topK: Int = 10) async throws -> HighlightResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("highlight"))
@@ -46,7 +47,7 @@ struct HighlightService {
         request.timeoutInterval = 600  // first call downloads Pegasus + mpnet weights
 
         request.httpBody = try JSONEncoder().encode(
-            HighlightRequest(text: text, topK: topK, segments: segments))
+            HighlightRequest(text: text, topK: topK, title: title, segments: segments))
 
         let data: Data
         let response: URLResponse

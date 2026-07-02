@@ -13,10 +13,13 @@ import Foundation
 struct HighlightRequest: Codable {
     let text: String
     let topK: Int
+    /// User-supplied video title; folded into summarization to keep the summary
+    /// (and the relevance ranking) anchored to the video's topic. nil when blank.
+    let title: String?
     let segments: [TranscriptSegment]?
 
     enum CodingKeys: String, CodingKey {
-        case text, segments
+        case text, title, segments
         case topK = "top_k"
     }
 }

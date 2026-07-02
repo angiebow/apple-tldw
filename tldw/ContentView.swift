@@ -151,6 +151,8 @@ struct ContentView: View {
                 }
             }
 
+            titleField
+
             mediaDropZone
 
             if !model.statusMessage.isEmpty {
@@ -164,6 +166,29 @@ struct ContentView: View {
             }
         }
         .padding(28)
+    }
+
+    /// Optional title for the recording. Fed to the backend so the summary — and
+    /// the relevance ranking derived from it — stays anchored to the video's topic.
+    private var titleField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Video title")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.secondary)
+            TextField("e.g. \"How we shipped Shorts in a weekend\" (optional)",
+                      text: $model.videoTitle)
+                .textFieldStyle(.plain)
+                .font(.title3)
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                .background(Color(nsColor: .textBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
+                )
+            Text("Helps tldw summarize the transcript around what the video is about.")
+                .font(.caption).foregroundStyle(.tertiary)
+        }
     }
 
     /// The input is now a recording, not pasted text: drag an audio/video file
@@ -524,7 +549,7 @@ private struct EditorView: View {
     let transcriptSegments: [TranscriptSegment]  // word times → karaoke captions
     let onBack: () -> Void
     let onRemove: (Int) -> Void            // by line id
-    let onMove: (Int, Int) -> Void         // (fromOffset, toOffset)
+    let onMove: (Int, Int) -> Void         // (fromOffset, toOffset) — live drag reorder
 
     // Export state: cut the selected spans to .mp4 files via the backend.
     @State private var isExporting = false
@@ -539,6 +564,10 @@ private struct EditorView: View {
     @State private var selection: Selection?
     @State private var marked: Set<Selection> = []   // clips ticked for merging
     @State private var showMergePreview = false
+    /// The transcript clip being interactively dragged, and the live pointer x
+    /// (in the clip-strip coordinate space) driving its follow-the-cursor offset.
+    @State private var draggingID: Int?
+    @State private var dragX: CGFloat = 0
 
     // Detected blooper (dead-air) spans, surfaced into the same timeline sequence.
     @State private var bloopers: [BlooperSpan] = []
@@ -733,6 +762,49 @@ private struct EditorView: View {
 
     private func toggleMark(_ key: Selection) {
         if marked.contains(key) { marked.remove(key) } else { marked.insert(key) }
+    }
+
+    /// Name of the coordinate space the clip drag reads its pointer x from.
+    private static let clipStripSpace = "clipStrip"
+    /// Horizontal gap between timeline clips (matches the HStack spacing).
+    private static let clipGap: CGFloat = 2
+
+    /// Center x of the clip at `index` in the current transcript-lane layout.
+    private func clipCenterX(_ index: Int) -> CGFloat {
+        var x: CGFloat = 0
+        for i in 0..<index { x += clipWidth(clips[i]) + Self.clipGap }
+        return x + clipWidth(clips[index]) / 2
+    }
+
+    /// Which slot the pointer at `x` (clip-strip space) currently hovers over —
+    /// the index whose half-way point the pointer has crossed.
+    private func dragTargetIndex(x: CGFloat) -> Int {
+        var acc: CGFloat = 0
+        for (i, c) in clips.enumerated() {
+            let w = clipWidth(c)
+            if x < acc + w / 2 { return i }
+            acc += w + Self.clipGap
+        }
+        return max(0, clips.count - 1)
+    }
+
+    /// Interactive drag: the clip tracks the cursor, and as its pointer crosses a
+    /// neighbour's midpoint the sequence reorders live (a small `minimumDistance`
+    /// keeps a plain click working as a select rather than a drag).
+    private func clipDrag(_ clip: LineScore) -> some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.clipStripSpace))
+            .onChanged { value in
+                if draggingID == nil { draggingID = clip.id }
+                guard draggingID == clip.id else { return }
+                dragX = value.location.x
+                let target = dragTargetIndex(x: dragX)
+                if let cur = clips.firstIndex(where: { $0.id == clip.id }), target != cur {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        onMove(cur, target > cur ? target + 1 : target)
+                    }
+                }
+            }
+            .onEnded { _ in draggingID = nil }
     }
 
     private var topBar: some View {
@@ -992,8 +1064,8 @@ private struct EditorView: View {
                     TimelineRuler(width: contentWidth, totalSeconds: timelineSeconds, pxPerSec: pxPerSec)
                     // Transcript lane — the sentence clips.
                     LaneLabel(text: "Transcript")
-                    HStack(spacing: 2) {
-                        ForEach(clips) { clip in
+                    HStack(spacing: EditorView.clipGap) {
+                        ForEach(Array(clips.enumerated()), id: \.element.id) { index, clip in
                             TimelineClip(clip: clip,
                                          width: clipWidth(clip),
                                          isCurrent: selection == .sentence(clip.id),
@@ -1001,8 +1073,18 @@ private struct EditorView: View {
                                          onSelect: { selectSentence(clip) },
                                          onMark: { toggleMark(.sentence(clip.id)) },
                                          onRemove: { onRemove(clip.id) })
+                                // Interactive reorder: the dragged clip follows the
+                                // cursor while the others shift live around it.
+                                .offset(x: draggingID == clip.id ? dragX - clipCenterX(index) : 0)
+                                .scaleEffect(draggingID == clip.id ? 1.06 : 1)
+                                .shadow(color: .black.opacity(draggingID == clip.id ? 0.4 : 0),
+                                        radius: 6, y: 3)
+                                .zIndex(draggingID == clip.id ? 1 : 0)
+                                .gesture(clipDrag(clip))
                         }
                     }
+                    .coordinateSpace(name: EditorView.clipStripSpace)
+                    .animation(.easeInOut(duration: 0.18), value: clips.map(\.id))
                     // Blooper lane — separate sequence below the transcript clips.
                     if !bloopers.isEmpty {
                         LaneLabel(text: "Bloopers")

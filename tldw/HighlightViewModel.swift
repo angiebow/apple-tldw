@@ -11,6 +11,9 @@ final class HighlightViewModel {
     /// The transcript produced from the dropped recording (shown as provenance in
     /// the results header). Empty until a recording has been transcribed.
     var transcriptText: String = ""
+    /// Optional user-supplied title for the recording; folded into summarization
+    /// so the summary (and relevance ranking) stays anchored to the video's topic.
+    var videoTitle: String = ""
     var summary: String = ""
     var relevantLines: [LineScore] = []
     var viralLines: [LineScore] = []
@@ -70,7 +73,10 @@ final class HighlightViewModel {
         // Pass segments so each ranked line keeps its start/end span (for clipping).
         statusMessage = "Summarizing, embedding, and scoring lines… first run downloads the models."
         do {
-            let response = try await service.highlight(transcript, segments: segments, topK: 10)
+            let title = videoTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            let response = try await service.highlight(transcript,
+                                                       title: title.isEmpty ? nil : title,
+                                                       segments: segments, topK: 10)
             summary = response.summary
             relevantLines = response.relevant
             viralLines = response.viral
@@ -88,6 +94,7 @@ final class HighlightViewModel {
     /// Clear back to the empty input state (drop-a-recording screen).
     func reset() {
         transcriptText = ""
+        videoTitle = ""
         sourceVideoURL = nil
         transcriptSegments = []
         clearResults()

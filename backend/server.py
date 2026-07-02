@@ -3,7 +3,7 @@
 A FastAPI server that runs the 5-step highlighter pipeline and returns two
 top-K ranked lists for a transcript:
 
-    1. Summarize the transcript                 google/pegasus-cnn_dailymail
+    1. Summarize the transcript                 Llama-3.2-3B-Instruct (MLX)
     2. Embed each line + the summary            sentence-transformers/all-mpnet-base-v2
     3. relevance = cosine(line, summary)        (most-relevant list)
     4. Virality Detector (classification)       distilbert  -> viral_prob / viral_label
@@ -30,8 +30,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from transformers import (AutoModelForSequenceClassification, AutoTokenizer,
-                          AutoModelForSeq2SeqLM, AutoProcessor,
-                          MusicgenForConditionalGeneration)
+                          AutoProcessor, MusicgenForConditionalGeneration)
 
 # ── Config ────────────────────────────────────────────────────────────────
 DEVICE = ("cuda" if torch.cuda.is_available()
@@ -42,12 +41,17 @@ MODELS_DIR = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
                  "..", "poc-content-highlighter", "models"),
 )
-SUMMARIZER_NAME = "google/pegasus-cnn_dailymail"
+# Summarizer: instruction-tuned Llama 3.2 3B (4-bit, MLX) — ported from the
+# poc-audio-extraction LLM pipeline. Instruction-tuned so a supplied video title
+# can be injected into the prompt to steer the summary (and the relevance ranking
+# derived from it). Apple-Silicon-only (mlx_lm); overridable for other MLX repos.
+SUMMARIZER_NAME = os.environ.get("TLDW_SUMMARIZER",
+                                 "mlx-community/Llama-3.2-3B-Instruct-4bit")
 EMBEDDER_NAME   = "sentence-transformers/all-mpnet-base-v2"
 DETECTOR_DIR    = os.path.join(MODELS_DIR, "distilbert-detector")
 RERANKER_DIR    = os.path.join(MODELS_DIR, "bert-ranker")
 
-SUMM_MAX_INPUT  = 1024  # Pegasus encoder cap (max_position_embeddings)
+SUMM_CHUNK_TOKENS = 1024  # pack transcript into <=1024-token chunks before summarizing
 SCORE_MAX_LEN   = 64    # detector/reranker were trained at max_length=64
 MIN_LINE_WORDS  = 4     # drop trivially short lines
 
@@ -95,8 +99,10 @@ def _load_models():
     if _models:
         return _models
     print(f"[tldw] loading models on {DEVICE} …")
-    _models["summarizer_tok"] = AutoTokenizer.from_pretrained(SUMMARIZER_NAME)
-    _models["summarizer"] = AutoModelForSeq2SeqLM.from_pretrained(SUMMARIZER_NAME).to(DEVICE).eval()
+    # Llama summarizer via MLX (Apple Silicon). Imported here (not at module top)
+    # so the dependency is only required when models actually load.
+    from mlx_lm import load as _mlx_load  # noqa: E402  (intentionally deferred)
+    _models["summarizer"], _models["summarizer_tok"] = _mlx_load(SUMMARIZER_NAME)
     _models["embedder"] = SentenceTransformer(EMBEDDER_NAME, device=DEVICE)
 
     _models["detector_tok"] = AutoTokenizer.from_pretrained(DETECTOR_DIR)
@@ -122,21 +128,22 @@ def split_lines(text: str) -> list[str]:
 
 
 def _sentence_chunks(text: str, tok, budget: int) -> list[str]:
-    """Pack whole sentences into chunks of <= budget content-tokens (greedy),
-    so no sentence is ever split across a chunk boundary."""
+    """Pack whole sentences into chunks of <= budget tokens (greedy), so no
+    sentence is split across a chunk boundary. Uses the Llama tokenizer's
+    encode/decode (MLX TokenizerWrapper proxies these to the HF tokenizer)."""
     sents = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
 
     chunks, cur, cur_len = [], [], 0
     for s in sents:
-        n = len(tok(s, add_special_tokens=False)["input_ids"])
+        n = len(tok.encode(s, add_special_tokens=False))
         # A single sentence longer than the budget can't fit whole anywhere;
         # hard-split just that one by tokens (unavoidable mid-sentence cut).
         if n > budget:
             if cur:
                 chunks.append(" ".join(cur)); cur, cur_len = [], 0
-            ids = tok(s, add_special_tokens=False)["input_ids"]
+            ids = tok.encode(s, add_special_tokens=False)
             for i in range(0, len(ids), budget):
-                chunks.append(tok.decode(ids[i:i + budget], skip_special_tokens=True))
+                chunks.append(tok.decode(ids[i:i + budget]))
             continue
         # Flush before adding the sentence that would overflow the budget.
         if cur_len + n > budget:
@@ -148,27 +155,49 @@ def _sentence_chunks(text: str, tok, budget: int) -> list[str]:
     return chunks
 
 
-@torch.no_grad()
-def summarize(text: str, m) -> str:
-    """Summarize the transcript; hierarchically condense long inputs so we stay
-    under Pegasus's encoder cap."""
-    tok, model = m["summarizer_tok"], m["summarizer"]
+def _llama_generate(m, instruction: str, max_tokens: int) -> str:
+    """Run one instruction through the MLX Llama chat model and return the text."""
+    from mlx_lm import generate  # noqa: E402  (deferred with the model load)
+    model, tok = m["summarizer"], m["summarizer_tok"]
+    messages = [{"role": "user", "content": instruction}]
+    prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    return generate(model, tok, prompt=prompt, max_tokens=max_tokens, verbose=False).strip()
 
-    def _one(chunk: str) -> str:
-        enc = tok(chunk, return_tensors="pt", truncation=True,
-                  max_length=SUMM_MAX_INPUT).to(DEVICE)
-        out = model.generate(**enc, max_length=130, min_length=30, num_beams=4)
-        return tok.decode(out[0], skip_special_tokens=True).replace("<n>", " ").strip()
 
-    ids = tok(text, return_tensors="pt")["input_ids"][0]
-    if len(ids) <= SUMM_MAX_INPUT:
-        return _one(text)
-    # Map: sentence-aware chunks, summarize each. Reduce: summarize the joined
-    # partials, re-chunking if they themselves exceed the encoder cap.
-    partial = " ".join(_one(c) for c in _sentence_chunks(text, tok, SUMM_MAX_INPUT))
-    while len(tok(partial, return_tensors="pt")["input_ids"][0]) > SUMM_MAX_INPUT:
-        partial = " ".join(_one(c) for c in _sentence_chunks(partial, tok, SUMM_MAX_INPUT))
-    return _one(partial)
+def summarize(text: str, m, title: str = "") -> str:
+    """Summarize the transcript with the instruction-tuned Llama summarizer, using
+    the same map-reduce as the poc-audio-extraction pipeline: summarize each
+    <=1024-token chunk, then synthesize a cohesive global summary. A supplied
+    `title` is injected into both prompts so the summary — and the relevance
+    ranking derived from it — stays anchored to what the video is about."""
+    tok = m["summarizer_tok"]
+    title = (title or "").strip()
+    title_ctx = f'The video is titled "{title}". ' if title else ""
+
+    # Map: one summary per chunk.
+    chunk_summaries = []
+    for chunk_text in _sentence_chunks(text, tok, SUMM_CHUNK_TOKENS):
+        prompt = (
+            "You are a professional editor. " + title_ctx
+            + "Meticulously summarize the following transcript chunk. "
+            "Do NOT assume or guess the names of any speakers. "
+            "Start the summary directly with the key points. Limit introduction phrases.\n\n"
+            f"Transcript:\n{chunk_text}\n\nSummary:"
+        )
+        chunk_summaries.append(_llama_generate(m, prompt, max_tokens=150))
+
+    if not chunk_summaries:
+        return ""
+
+    # Reduce: synthesize a cohesive global summary from the chunk summaries.
+    combined = " ".join(chunk_summaries)
+    prompt = (
+        title_ctx
+        + "Synthesize a cohesive global summary based on these chunk summaries. "
+        "Limit to exactly 2-3 sentences.\n\n"
+        f"Summaries:\n{combined}\n\nGlobal Summary:"
+    )
+    return _llama_generate(m, prompt, max_tokens=256)
 
 
 @torch.no_grad()
@@ -464,6 +493,9 @@ class TranscriptSegmentIn(BaseModel):
 class HighlightRequest(BaseModel):
     text: str
     top_k: int = 10
+    # Optional user-supplied video title. Folded into summarization so the summary
+    # (and the relevance ranking derived from it) stays anchored to the topic.
+    title: Optional[str] = None
     # Optional timestamped lines from /transcribe. When present, these are ranked
     # directly (instead of re-splitting `text`) so each result carries start/end —
     # which the /clip endpoint needs to cut the actual video span.
@@ -546,7 +578,7 @@ def highlight(req: HighlightRequest):
             raise HTTPException(status_code=400,
                                 detail="Could not extract any usable lines from the transcript.")
 
-    summary = summarize(text, m)
+    summary = summarize(text, m, title=req.title or "")
 
     relevance = relevance_scores(lines, summary, m)
     viral_prob, viral_label = detector_scores(lines, m)
