@@ -1440,7 +1440,6 @@ private struct EditorView: View {
                             }
                         }
                     }
-                    WaveformTrack(width: contentWidth)
                 }
                 .padding(.horizontal, 20).padding(.bottom, 16)
             }
@@ -1675,29 +1674,6 @@ private struct LaneLabel: View {
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(.white.opacity(0.45))
             .padding(.top, 2)
-    }
-}
-
-/// Decorative audio waveform track (no real audio yet).
-private struct WaveformTrack: View {
-    let width: CGFloat
-
-    private var barCount: Int { max(1, Int(width / 4)) }
-    private func barHeight(_ i: Int) -> CGFloat {
-        let h = (sin(Double(i) * 0.7) + sin(Double(i) * 0.23)) / 2  // -1...1-ish
-        return 5 + CGFloat((h + 1) / 2) * 26
-    }
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<barCount, id: \.self) { i in
-                Capsule().fill(Color.blue.opacity(0.75))
-                    .frame(width: 2, height: barHeight(i))
-            }
-        }
-        .frame(width: width, height: 40, alignment: .leading)
-        .padding(.horizontal, 4)
-        .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
     }
 }
 
