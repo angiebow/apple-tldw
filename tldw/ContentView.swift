@@ -543,6 +543,23 @@ private struct ShortDetailView: View {
 
 // MARK: - Editor page
 
+/// Output orientation chosen on the editor page for exported / merged Shorts.
+enum ShortOrientation: String, CaseIterable, Identifiable {
+    case portrait  = "Portrait"
+    case landscape = "Landscape"
+
+    var id: String { rawValue }
+    /// Backend `vertical` flag: portrait → 1080×1920 with a blurred top/bottom
+    /// fill of the clip; landscape → the original framing, untouched.
+    var vertical: Bool { self == .portrait }
+    var systemImage: String { self == .portrait ? "rectangle.portrait" : "rectangle" }
+    var exportHelp: String {
+        self == .portrait
+            ? "Portrait 1080×1920 — top/bottom are a blurred extension of the clip."
+            : "Landscape — keep the recording's original orientation and framing."
+    }
+}
+
 private struct EditorView: View {
     let clips: [LineScore]                 // selected lines, in arranged order
     let sourceVideoURL: URL?               // the recording clips are cut from
@@ -555,6 +572,8 @@ private struct EditorView: View {
     @State private var isExporting = false
     @State private var exportError: String?
     @State private var exportNotice: String?
+    /// Landscape (as-is) vs portrait (blurred top/bottom fill) for exports + merge.
+    @State private var orientation: ShortOrientation = .portrait
 
     /// What the big preview is showing — a sentence clip (text) or a blooper (video).
     private enum Selection: Hashable {
@@ -715,7 +734,7 @@ private struct EditorView: View {
     var body: some View {
         if showMergePreview {
             MergePreviewView(items: mergeItems, videoURL: sourceVideoURL ?? blooperVideoURL,
-                             segments: transcriptSegments,
+                             segments: transcriptSegments, orientation: orientation,
                              onBack: { showMergePreview = false })
         } else {
             editorBody
@@ -861,6 +880,7 @@ private struct EditorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            orientationPicker
             if isExporting {
                 ProgressView().controlSize(.small)
             }
@@ -874,6 +894,19 @@ private struct EditorView: View {
         .padding()
     }
 
+    /// Landscape / portrait segmented control that drives every export on this page.
+    private var orientationPicker: some View {
+        Picker("Orientation", selection: $orientation) {
+            ForEach(ShortOrientation.allCases) { o in
+                Label(o.rawValue, systemImage: o.systemImage).tag(o)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .help(orientation.exportHelp)
+    }
+
     /// Selected clips that have a source-video span to cut (timestamped lines only).
     private var exportableClips: [LineScore] {
         clips.filter { $0.start != nil && $0.end != nil }
@@ -882,7 +915,8 @@ private struct EditorView: View {
     private var exportHelp: String {
         if sourceVideoURL == nil { return "No source recording to cut from." }
         if exportableClips.isEmpty { return "These clips have no timecodes to cut." }
-        return "Cut the selected spans to .mp4 files and reveal them in Finder."
+        return "Cut the selected spans to .mp4 files and reveal them in Finder. "
+            + orientation.exportHelp
     }
 
     /// Cut the exportable clips out of the source video, then reveal them in Finder.
@@ -897,18 +931,19 @@ private struct EditorView: View {
         Task {
             defer { isExporting = false }
             do {
-                // Portrait Shorts + karaoke captions; forward transcript word times.
+                // Landscape (as-is) or portrait (blurred fill); + karaoke captions.
                 let result = try await service.exportClips(
-                    videoPath: url.path, clips: spans, segments: transcriptSegments)
+                    videoPath: url.path, clips: spans, segments: transcriptSegments,
+                    vertical: orientation.vertical)
                 // Reveal the written files (or the folder) in Finder.
                 let urls = result.clips.map { URL(fileURLWithPath: $0.path) }
                 NSWorkspace.shared.activateFileViewerSelecting(
                     urls.isEmpty ? [URL(fileURLWithPath: result.outputDir)] : urls)
                 // Captions were asked for but this ffmpeg can't burn them (no libass).
                 if result.subtitlesRequested && !result.subtitlesApplied {
-                    exportNotice = "Exported \(result.count) portrait clip\(result.count == 1 ? "" : "s"), "
-                        + "but captions were skipped — this ffmpeg has no subtitles support "
-                        + "(install an ffmpeg built with libass to burn karaoke subtitles)."
+                    exportNotice = "Exported \(result.count) \(orientation.rawValue.lowercased()) "
+                        + "clip\(result.count == 1 ? "" : "s"), but captions were skipped — this ffmpeg "
+                        + "has no subtitles support (install an ffmpeg built with libass to burn karaoke subtitles)."
                 }
             } catch {
                 exportError = error.localizedDescription
@@ -928,15 +963,28 @@ private struct EditorView: View {
                 sentencePreview
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
+        // Frame the preview to the chosen output shape so the orientation toggle is
+        // visible here: portrait shows the 9:16 canvas (real footage letterboxed —
+        // the blurred top/bottom fill is added by ffmpeg on export), landscape 16:9.
+        .aspectRatio(orientation == .portrait ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
+        .frame(maxWidth: .infinity, maxHeight: orientation == .portrait ? 480 : 340)
+        .overlay(alignment: .top) {
+            if orientation == .portrait {
+                Text("Portrait 9:16 · blurred fill")
+                    .font(.caption2).foregroundStyle(.white)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .padding(8)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: orientation)
     }
 
     /// A selected transcript line's real footage, cut to its recorded [start, end]
     /// span and played in place from the source recording.
     private func sentenceVideoPreview(_ clip: LineScore) -> some View {
         ZStack(alignment: .bottom) {
-            VideoPlayer(player: bigPlayer)
-                .background(Color.black)
+            OrientationVideoCanvas(player: bigPlayer, portrait: orientation == .portrait)
 
             HStack(spacing: 8) {
                 Image(systemName: "text.quote")
@@ -966,8 +1014,7 @@ private struct EditorView: View {
     /// The blooper span playing in place from its source video.
     private func blooperPreview(_ span: BlooperSpan) -> some View {
         ZStack(alignment: .bottom) {
-            VideoPlayer(player: bigPlayer)
-                .background(Color.black)
+            OrientationVideoCanvas(player: bigPlayer, portrait: orientation == .portrait)
 
             HStack(spacing: 8) {
                 Image(systemName: "waveform.badge.exclamationmark")
@@ -1437,6 +1484,7 @@ private struct MergePreviewView: View {
     let items: [MergeClip]
     let videoURL: URL?                            // source recording the spans are cut from
     let segments: [TranscriptSegment]            // word times → karaoke captions
+    let orientation: ShortOrientation            // landscape (as-is) or portrait (blur fill)
     let onBack: () -> Void
 
     @State private var player = AVPlayer()
@@ -1494,7 +1542,7 @@ private struct MergePreviewView: View {
             if isExporting { ProgressView().controlSize(.small) }
             Button { exportMerged() } label: { Label("Export Short", systemImage: "square.and.arrow.up") }
                 .disabled(!hasVideo || isExporting || videoURL == nil)
-                .help("Render the merged clips as a 1080×1920 portrait Short with karaoke captions")
+                .help("Render the merged clips as a captioned Short. " + orientation.exportHelp)
         }
         .padding()
     }
@@ -1502,18 +1550,28 @@ private struct MergePreviewView: View {
     @ViewBuilder
     private var preview: some View {
         if hasVideo {
-            VideoPlayer(player: player)
-                .background(Color.black)
+            OrientationVideoCanvas(player: player, portrait: orientation == .portrait)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
-                .frame(maxWidth: .infinity, minHeight: 320)
+                // Match the export shape: portrait 9:16 (live blurred fill) vs
+                // landscape 16:9, so the orientation toggle is visible.
+                .aspectRatio(orientation == .portrait ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: orientation == .portrait ? 480 : 340)
+                .animation(.easeInOut(duration: 0.2), value: orientation)
                 .overlay(alignment: .bottomLeading) {
-                    if textOnlyCount > 0 {
-                        Text("\(textOnlyCount) line\(textOnlyCount == 1 ? "" : "s") without timecodes not shown")
-                            .font(.caption2).foregroundStyle(.white)
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(.black.opacity(0.55), in: Capsule())
-                            .padding(10)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if orientation == .portrait {
+                            Text("Portrait 9:16 · blurred fill")
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(.black.opacity(0.55), in: Capsule())
+                        }
+                        if textOnlyCount > 0 {
+                            Text("\(textOnlyCount) line\(textOnlyCount == 1 ? "" : "s") without timecodes not shown")
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(.black.opacity(0.55), in: Capsule())
+                        }
                     }
+                    .font(.caption2).foregroundStyle(.white)
+                    .padding(10)
                 }
         } else {
             ZStack {
@@ -1590,11 +1648,13 @@ private struct MergePreviewView: View {
             defer { isExporting = false }
             do {
                 let result = try await service.mergeClips(
-                    videoPath: videoURL.path, clips: spans, segments: segments)
+                    videoPath: videoURL.path, clips: spans, segments: segments,
+                    vertical: orientation.vertical)
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.path)])
                 if result.subtitlesRequested && !result.subtitlesApplied {
-                    exportNotice = "Exported the portrait Short, but karaoke captions were skipped — "
-                        + "this ffmpeg has no subtitles support (install an ffmpeg built with libass)."
+                    exportNotice = "Exported the \(orientation.rawValue.lowercased()) Short, but karaoke "
+                        + "captions were skipped — this ffmpeg has no subtitles support "
+                        + "(install an ffmpeg built with libass)."
                 }
             } catch {
                 exportError = error.localizedDescription
@@ -1645,6 +1705,64 @@ private struct MergeCard: View {
             }
             return c.text
         case .blooper(let b): return String(format: "%.2fs · %@", b.duration, b.label)
+        }
+    }
+}
+
+/// An `AVPlayerLayer`-backed video view. Because the layer is just a render
+/// surface, several instances can share one `AVPlayer` — which lets us stack a
+/// blurred fill behind a sharp copy without a second player.
+private struct PlayerLayerView: NSViewRepresentable {
+    let player: AVPlayer
+    var gravity: AVLayerVideoGravity = .resizeAspect
+
+    func makeNSView(context: Context) -> PlayerLayerNSView {
+        let view = PlayerLayerNSView()
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = gravity
+        return view
+    }
+
+    func updateNSView(_ view: PlayerLayerNSView, context: Context) {
+        if view.playerLayer.player !== player { view.playerLayer.player = player }
+        view.playerLayer.videoGravity = gravity
+    }
+}
+
+/// Layer-backed NSView that keeps its `AVPlayerLayer` sized to its bounds.
+private final class PlayerLayerNSView: NSView {
+    let playerLayer = AVPlayerLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer = CALayer()
+        layer?.addSublayer(playerLayer)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+
+    override func layout() {
+        super.layout()
+        playerLayer.frame = bounds
+    }
+}
+
+/// Preview canvas that mirrors the export framing. Portrait stacks a blurred,
+/// aspect-fill copy of the same player behind a sharp aspect-fit copy — the same
+/// look ffmpeg burns in on export. Landscape is a single aspect-fit video.
+private struct OrientationVideoCanvas: View {
+    let player: AVPlayer
+    let portrait: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black
+            if portrait {
+                PlayerLayerView(player: player, gravity: .resizeAspectFill)
+                    .blur(radius: 24)
+                    .clipped()
+            }
+            PlayerLayerView(player: player, gravity: .resizeAspect)
         }
     }
 }
