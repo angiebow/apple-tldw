@@ -574,6 +574,8 @@ private struct EditorView: View {
     @State private var exportNotice: String?
     /// Landscape (as-is) vs portrait (blurred top/bottom fill) for exports + merge.
     @State private var orientation: ShortOrientation = .portrait
+    /// Burn karaoke captions into exports (and show them live in the preview).
+    @State private var captionsOn = true
 
     /// What the big preview is showing — a sentence clip (text) or a blooper (video).
     private enum Selection: Hashable {
@@ -735,6 +737,7 @@ private struct EditorView: View {
         if showMergePreview {
             MergePreviewView(items: mergeItems, videoURL: sourceVideoURL ?? blooperVideoURL,
                              segments: transcriptSegments, orientation: orientation,
+                             captionsOn: captionsOn,
                              onBack: { showMergePreview = false })
         } else {
             editorBody
@@ -880,6 +883,9 @@ private struct EditorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            Toggle(isOn: $captionsOn) { Label("Captions", systemImage: "captions.bubble") }
+                .toggleStyle(.button)
+                .help("Burn word-by-word karaoke captions into the export (needs ffmpeg libass), and preview them live")
             orientationPicker
             if isExporting {
                 ProgressView().controlSize(.small)
@@ -934,7 +940,7 @@ private struct EditorView: View {
                 // Landscape (as-is) or portrait (blurred fill); + karaoke captions.
                 let result = try await service.exportClips(
                     videoPath: url.path, clips: spans, segments: transcriptSegments,
-                    vertical: orientation.vertical)
+                    vertical: orientation.vertical, subtitles: captionsOn)
                 // Reveal the written files (or the folder) in Finder.
                 let urls = result.clips.map { URL(fileURLWithPath: $0.path) }
                 NSWorkspace.shared.activateFileViewerSelecting(
@@ -982,9 +988,22 @@ private struct EditorView: View {
 
     /// A selected transcript line's real footage, cut to its recorded [start, end]
     /// span and played in place from the source recording.
+    /// Transcript words that fall inside a clip's span (source timeline) — feeds
+    /// the live caption overlay so it matches the burned-in export captions.
+    private func wordsFor(_ clip: LineScore) -> [TranscriptWord] {
+        guard let s = clip.start, let e = clip.end else { return [] }
+        return transcriptSegments.flatMap { $0.words ?? [] }
+            .filter { $0.start < e && $0.end > s }
+    }
+
     private func sentenceVideoPreview(_ clip: LineScore) -> some View {
         ZStack(alignment: .bottom) {
             OrientationVideoCanvas(player: bigPlayer, portrait: orientation == .portrait)
+
+            if captionsOn {
+                CaptionOverlay(player: bigPlayer, words: wordsFor(clip),
+                               vertical: orientation == .portrait)
+            }
 
             HStack(spacing: 8) {
                 Image(systemName: "text.quote")
@@ -1485,10 +1504,12 @@ private struct MergePreviewView: View {
     let videoURL: URL?                            // source recording the spans are cut from
     let segments: [TranscriptSegment]            // word times → karaoke captions
     let orientation: ShortOrientation            // landscape (as-is) or portrait (blur fill)
+    let captionsOn: Bool                         // burn + preview karaoke captions
     let onBack: () -> Void
 
     @State private var player = AVPlayer()
     @State private var hasVideo = false
+    @State private var captionWords: [TranscriptWord] = []   // remapped to composition time
     @State private var buildError: String?
     @State private var isExporting = false
     @State private var exportError: String?
@@ -1557,6 +1578,12 @@ private struct MergePreviewView: View {
                 .aspectRatio(orientation == .portrait ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
                 .frame(maxWidth: .infinity, maxHeight: orientation == .portrait ? 480 : 340)
                 .animation(.easeInOut(duration: 0.2), value: orientation)
+                .overlay {
+                    if captionsOn && !captionWords.isEmpty {
+                        CaptionOverlay(player: player, words: captionWords,
+                                       vertical: orientation == .portrait)
+                    }
+                }
                 .overlay(alignment: .bottomLeading) {
                     VStack(alignment: .leading, spacing: 4) {
                         if orientation == .portrait {
@@ -1614,14 +1641,27 @@ private struct MergePreviewView: View {
         guard let videoURL else { return }
         let asset = AVURLAsset(url: videoURL)
         let comp = AVMutableComposition()
+        let allWords = segments.flatMap { $0.words ?? [] }
         var cursor = CMTime.zero
+        var caps: [TranscriptWord] = []
         do {
             for item in items {
                 guard let range = item.sourceRange else { continue }
+                // Remap this sentence's words from the source timeline onto the
+                // composition timeline (each item is appended at `cursor`).
+                if case .sentence(let c) = item, let s = c.start, let e = c.end {
+                    let offset = cursor.seconds
+                    for w in allWords where w.start < e && w.end > s {
+                        caps.append(TranscriptWord(word: w.word,
+                                                   start: offset + (w.start - s),
+                                                   end: offset + (w.end - s)))
+                    }
+                }
                 try comp.insertTimeRange(range, of: asset, at: cursor)
                 cursor = cursor + range.duration
             }
             if cursor > .zero {
+                captionWords = caps
                 player.replaceCurrentItem(with: AVPlayerItem(asset: comp))
                 hasVideo = true
                 player.seek(to: .zero)
@@ -1649,7 +1689,7 @@ private struct MergePreviewView: View {
             do {
                 let result = try await service.mergeClips(
                     videoPath: videoURL.path, clips: spans, segments: segments,
-                    vertical: orientation.vertical)
+                    vertical: orientation.vertical, subtitles: captionsOn)
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.path)])
                 if result.subtitlesRequested && !result.subtitlesApplied {
                     exportNotice = "Exported the \(orientation.rawValue.lowercased()) Short, but karaoke "
@@ -1763,6 +1803,79 @@ private struct OrientationVideoCanvas: View {
                     .clipped()
             }
             PlayerLayerView(player: player, gravity: .resizeAspect)
+        }
+    }
+}
+
+/// Live word-by-word karaoke caption overlay, driven by the player's clock. The
+/// `words` carry start/end on the *same* timeline the player reports — the source
+/// timeline for a single clip, or the composition timeline for the merged preview.
+/// This mirrors the burned-in ASS captions (active word boxed) so the preview
+/// matches the export.
+private struct CaptionOverlay: View {
+    let player: AVPlayer
+    let words: [TranscriptWord]
+    let vertical: Bool
+
+    @State private var now: Double = 0
+    @State private var observer: Any?
+
+    private var wordsPerLine: Int { vertical ? 3 : 5 }
+    private var groups: [[TranscriptWord]] {
+        stride(from: 0, to: words.count, by: wordsPerLine).map {
+            Array(words[$0 ..< min($0 + wordsPerLine, words.count)])
+        }
+    }
+    /// The line whose time span currently contains the playhead.
+    private var activeGroup: [TranscriptWord]? {
+        groups.first { g in
+            guard let s = g.first?.start, let e = g.last?.end else { return false }
+            return now >= s && now <= e
+        }
+    }
+
+    /// Font size that keeps the active line within the (often narrow) preview
+    /// width — approximates heavy-caps glyph advance so long words shrink to fit.
+    private func fontSize(for group: [TranscriptWord], width: CGFloat) -> CGFloat {
+        let chars = group.reduce(0) { $0 + max($1.word.count, 1) }
+        let denom = CGFloat(chars + group.count * 2) * 0.62   // glyphs + per-word padding
+        let fit = (width - 16) / max(denom, 1)
+        return min(vertical ? 18 : 16, max(8, fit))
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            VStack {
+                Spacer()
+                if let group = activeGroup {
+                    let size = fontSize(for: group, width: geo.size.width)
+                    HStack(spacing: 4) {
+                        ForEach(Array(group.enumerated()), id: \.offset) { _, w in
+                            let active = now >= w.start && now < w.end
+                            Text(w.word.uppercased())
+                                .font(.system(size: size, weight: .heavy))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .padding(.horizontal, 4).padding(.vertical, 2)
+                                .background(active ? Color.red : Color.black.opacity(0.5),
+                                            in: RoundedRectangle(cornerRadius: 4))
+                        }
+                    }
+                    .shadow(radius: 3)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, geo.size.height * (vertical ? 0.11 : 0.06))
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            observer = player.addPeriodicTimeObserver(
+                forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main
+            ) { t in now = t.seconds }
+        }
+        .onDisappear {
+            if let observer { player.removeTimeObserver(observer); self.observer = nil }
         }
     }
 }

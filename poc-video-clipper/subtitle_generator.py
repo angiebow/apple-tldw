@@ -42,7 +42,8 @@ def generate_ass_file(
     clip_end: float,
     sentences_data: list,
     emoji: str,
-    output_ass_path: str
+    output_ass_path: str,
+    vertical: bool = True,
 ):
     """
     Membuat file subtitle ASS dengan highlight box merah per kata (word-by-word)
@@ -78,24 +79,31 @@ def generate_ass_file(
         s = seconds % 60
         return f"{h:01d}:{m:02d}:{s:05.2f}"
 
-    # PEMBAGIAN GRUP: Batasi maksimal 3 kata per baris agar rapi di layar vertikal
-    words_per_line = 3
+    # Canvas + styling follow the output orientation, so libass positions/sizes the
+    # captions for the actual frame instead of scaling a 9:16 layout onto 16:9:
+    #   portrait 1080×1920 → larger font, high bottom margin (clear of the fold);
+    #   landscape 1920×1080 → smaller font, low bottom margin, more words per line.
+    if vertical:
+        play_x, play_y, fontsize, margin_v, words_per_line = 1080, 1920, 85, 350, 3
+    else:
+        play_x, play_y, fontsize, margin_v, words_per_line = 1920, 1080, 60, 90, 5
+
     groups = [all_words[i:i+words_per_line] for i in range(0, len(all_words), words_per_line)]
-    
+
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
-        "PlayResX: 1080\n"
-        "PlayResY: 1920\n"
+        f"PlayResX: {play_x}\n"
+        f"PlayResY: {play_y}\n"
         "ScaledBorderAndShadow: yes\n\n"
-        
+
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        # Style Aktif: Box Merah (&H0000FF), Teks Putih (&HFFFFFF), Alignment tengah-bawah (2), Margin vertikal 350
-        "Style: Active,Arial,85,&HFFFFFF,&HFFFFFF,&H0000FF,&H0000FF,1,0,0,0,100,100,0,0,3,0,0,2,10,10,350,1\n"
-        # Style Inaktif: Box Hitam Transparan (&H80000000), Teks Abu-abu (&HCCCCCC), Alignment tengah-bawah (2), Margin vertikal 350
-        "Style: Inactive,Arial,85,&HCCCCCC,&HCCCCCC,&H80000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,2,10,10,350,1\n\n"
-        
+        # Style Aktif: Box Merah (&H0000FF), Teks Putih (&HFFFFFF), Alignment tengah-bawah (2)
+        f"Style: Active,Arial,{fontsize},&HFFFFFF,&HFFFFFF,&H0000FF,&H0000FF,1,0,0,0,100,100,0,0,3,0,0,2,10,10,{margin_v},1\n"
+        # Style Inaktif: Box Hitam Transparan (&H80000000), Teks Abu-abu (&HCCCCCC), Alignment tengah-bawah (2)
+        f"Style: Inactive,Arial,{fontsize},&HCCCCCC,&HCCCCCC,&H80000000,&H80000000,1,0,0,0,100,100,0,0,3,0,0,2,10,10,{margin_v},1\n\n"
+
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )

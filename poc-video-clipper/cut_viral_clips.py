@@ -165,6 +165,12 @@ def _render(video_path: str, clean_audio_path, start: float, duration: float,
         cmd += ["-filter_complex", graph, "-map", "[outv]",
                 "-map", "1:a" if use_clean else "0:a",
                 "-c:v", "libx264", "-c:a", "aac", "-s", "1080x1920", output_path]
+    elif ass_path:
+        # Landscape, but still burn the karaoke captions over the original frame.
+        esc = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        cmd += ["-filter_complex", f"[0:v]subtitles='{esc}'[outv]", "-map", "[outv]",
+                "-map", "1:a" if use_clean else "0:a",
+                "-c:v", "libx264", "-c:a", "aac", output_path]
     else:
         cmd += ["-map", "0:v", "-map", "1:a"] if use_clean else []
         cmd += ["-c:v", "libx264", "-c:a", "aac", output_path]
@@ -229,8 +235,10 @@ def cut_clips(video_path: str, clips: list, output_dir: str,
                                    "text": clip.get("text", ""),
                                    "words": clip.get("words") or []}]
                 # emoji="" → no Llama; generate_ass_file falls back to even word
-                # timing when a clip carries no word-level timestamps.
-                subtitle_generator.generate_ass_file(start, end, sentences_data, "", ass_path)
+                # timing when a clip carries no word-level timestamps. `vertical`
+                # sizes/positions the caption for the actual output frame.
+                subtitle_generator.generate_ass_file(start, end, sentences_data, "", ass_path,
+                                                     vertical=vertical)
 
             _render(video_path, clean_audio_path, start, duration,
                     output_path, vertical=vertical, ass_path=ass_path)
