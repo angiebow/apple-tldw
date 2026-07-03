@@ -27,7 +27,6 @@ struct BlooperPanel: View {
     @State private var isLoading = false
     @State private var statusMessage = ""
     @State private var errorMessage: String?
-    @State private var useLipCheck = true
     @State private var isDropTargeted = false
 
     private let service = HighlightService()
@@ -61,11 +60,6 @@ struct BlooperPanel: View {
                 Text(headerSubtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-
-            Toggle("Lip check", isOn: $useLipCheck)
-                .toggleStyle(.checkbox)
-                .help("Confirm the mouth is still (OpenCV). Slower, but flags spans where someone mouths silently.")
-                .disabled(isLoading)
 
             if isLoading {
                 ProgressView().controlSize(.small)
@@ -177,7 +171,7 @@ struct BlooperPanel: View {
             defer { isLoading = false }
             do {
                 let result = try await service.detectBloopers(
-                    videoPath: url.path, useLipCheck: useLipCheck)
+                    videoPath: url.path, useLipCheck: true)
                 response = result
                 errorMessage = nil
                 onBloopers(result.bloopers, url)   // push spans + source into the editor timeline
