@@ -531,6 +531,7 @@ class ClipRequest(BaseModel):
     video_path: str                       # absolute path to the source video (local)
     clips: list[ClipSpan]                 # spans to cut, in order
     name: Optional[str] = None            # output subfolder name (defaults to the source stem)
+    output_dir: Optional[str] = None      # user-chosen destination folder (else CLIPS_OUT_DIR/<name>)
     vertical: bool = True                 # render 1080×1920 portrait Shorts
     subtitles: bool = True                # burn karaoke captions (needs ffmpeg libass)
     srt: bool = True                      # also write a soft .srt sidecar per clip
@@ -543,6 +544,7 @@ class MergeRequest(BaseModel):
     video_path: str                       # absolute path to the source video (local)
     clips: list[ClipSpan]                 # spans to concatenate into one Short, in order
     name: Optional[str] = None            # output file stem (defaults to <source>_merged)
+    output_dir: Optional[str] = None      # user-chosen destination folder (else CLIPS_OUT_DIR/<name>)
     vertical: bool = True                 # render 1080×1920 portrait
     subtitles: bool = True                # burn karaoke captions (needs ffmpeg libass)
     # Full transcript segments with per-word times; words overlapping each span
@@ -746,7 +748,10 @@ def clip(req: ClipRequest):
 
     stem = os.path.splitext(os.path.basename(path))[0]
     name = (req.name or stem).strip() or stem
-    out_dir = os.path.join(CLIPS_OUT_DIR, name)
+    # Write into the user-chosen folder if given, else CLIPS_OUT_DIR/<name>.
+    out_dir = (os.path.expanduser(req.output_dir.strip())
+               if req.output_dir and req.output_dir.strip()
+               else os.path.join(CLIPS_OUT_DIR, name))
 
     mod = _load_clipper()
     subtitles_applied = req.subtitles and mod.ffmpeg_has_subtitles()
@@ -820,7 +825,10 @@ def merge(req: MergeRequest):
 
     stem = os.path.splitext(os.path.basename(path))[0]
     name = (req.name or f"{stem}_merged").strip() or f"{stem}_merged"
-    out_dir = os.path.join(CLIPS_OUT_DIR, name)
+    # Write into the user-chosen folder if given, else CLIPS_OUT_DIR/<name>.
+    out_dir = (os.path.expanduser(req.output_dir.strip())
+               if req.output_dir and req.output_dir.strip()
+               else os.path.join(CLIPS_OUT_DIR, name))
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{name}.mp4")
 

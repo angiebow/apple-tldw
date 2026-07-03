@@ -143,7 +143,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 titleBlock(emoji: "🩳", title: "Generate Shorts",
-                           subtitle: "Drop in a recording — tldw extracts the audio, transcribes it, then finds the most relevant and viral-worthy lines.")
+                           subtitle: "Drop in a recording — ViReel extracts the audio, transcribes it, then finds the most relevant and viral-worthy lines.")
                 Spacer()
                 HStack(spacing: 10) {
                     serverPill
@@ -186,7 +186,7 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 10)
                         .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
                 )
-            Text("Helps tldw summarize the transcript around what the video is about.")
+            Text("Helps ViReel summarize the transcript around what the video is about.")
                 .font(.caption).foregroundStyle(.tertiary)
         }
     }
@@ -668,6 +668,8 @@ private struct EditorView: View {
     @State private var orientation: ShortOrientation = .portrait
     /// Burn karaoke captions into exports (and show them live in the preview).
     @State private var captionsOn = true
+    /// User-chosen destination folder for exports (empty → backend default).
+    @AppStorage("tldwExportFolder") private var exportFolder = ""
 
     /// What the big preview is showing — a sentence clip (text) or a blooper (video).
     private enum Selection: Hashable {
@@ -876,6 +878,7 @@ private struct EditorView: View {
             MergePreviewView(items: mergeItems, videoURL: sourceVideoURL ?? blooperVideoURL,
                              segments: transcriptSegments, orientation: orientation,
                              captionsOn: captionsOn, beds: bedByClip, bedVolumes: bedVolumeByClip,
+                             exportFolder: exportFolder,
                              onBack: { showMergePreview = false })
         } else {
             editorBody
@@ -1053,6 +1056,7 @@ private struct EditorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            folderPicker
             Toggle(isOn: $captionsOn) { Label("Captions", systemImage: "captions.bubble") }
                 .toggleStyle(.button)
                 .help("Burn word-by-word karaoke captions into the export (needs ffmpeg libass), and preview them live")
@@ -1068,6 +1072,33 @@ private struct EditorView: View {
             .help(exportHelp)
         }
         .padding()
+    }
+
+    /// Human-readable name of the current export destination.
+    private var exportFolderName: String {
+        exportFolder.isEmpty ? "Movies/tldw-clips" : URL(fileURLWithPath: exportFolder).lastPathComponent
+    }
+
+    /// Button that opens a folder chooser for where exports are saved.
+    private var folderPicker: some View {
+        Button { chooseExportFolder() } label: {
+            Label(exportFolderName, systemImage: "folder")
+        }
+        .help("Choose where exported clips and Shorts are saved (currently: "
+              + (exportFolder.isEmpty ? "~/Movies/tldw-clips" : exportFolder) + ")")
+    }
+
+    /// Present a directory picker and remember the chosen export folder.
+    private func chooseExportFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Choose a folder to save exported videos into."
+        if !exportFolder.isEmpty { panel.directoryURL = URL(fileURLWithPath: exportFolder) }
+        if panel.runModal() == .OK, let url = panel.url { exportFolder = url.path }
     }
 
     /// Landscape / portrait segmented control that drives every export on this page.
@@ -1112,7 +1143,8 @@ private struct EditorView: View {
                 // Landscape (as-is) or portrait (blurred fill); + karaoke captions.
                 let result = try await service.exportClips(
                     videoPath: url.path, clips: spans, segments: transcriptSegments,
-                    vertical: orientation.vertical, subtitles: captionsOn)
+                    vertical: orientation.vertical, subtitles: captionsOn,
+                    outputDir: exportFolder.isEmpty ? nil : exportFolder)
                 // Reveal the written files (or the folder) in Finder.
                 let urls = result.clips.map { URL(fileURLWithPath: $0.path) }
                 NSWorkspace.shared.activateFileViewerSelecting(
@@ -1747,6 +1779,7 @@ private struct MergePreviewView: View {
     let captionsOn: Bool                         // burn + preview karaoke captions
     let beds: [Int: BacksoundResponse]           // per-sentence-clip music bed
     let bedVolumes: [Int: Double]                // per-clip bed volume (0–1)
+    let exportFolder: String                     // user-chosen destination ("" = default)
     let onBack: () -> Void
 
     @State private var player = AVPlayer()
@@ -2005,7 +2038,8 @@ private struct MergePreviewView: View {
             do {
                 let result = try await service.mergeClips(
                     videoPath: videoURL.path, clips: spans, segments: segments,
-                    vertical: orientation.vertical, subtitles: captionsOn)
+                    vertical: orientation.vertical, subtitles: captionsOn,
+                    outputDir: exportFolder.isEmpty ? nil : exportFolder)
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.path)])
                 if result.subtitlesRequested && !result.subtitlesApplied {
                     exportNotice = "Exported the \(orientation.rawValue.lowercased()) Short, but karaoke "

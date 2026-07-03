@@ -177,14 +177,15 @@ struct HighlightService {
                      segments: [TranscriptSegment]? = nil,
                      vertical: Bool = true,
                      subtitles: Bool = true,
-                     name: String? = nil) async throws -> ClipResponse {
+                     name: String? = nil,
+                     outputDir: String? = nil) async throws -> ClipResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("clip"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 900  // re-encoding several spans can take a while
 
         request.httpBody = try JSONEncoder().encode(
-            ClipRequest(videoPath: videoPath, clips: clips, name: name,
+            ClipRequest(videoPath: videoPath, clips: clips, name: name, outputDir: outputDir,
                         vertical: vertical, subtitles: subtitles, segments: segments))
 
         let data: Data
@@ -216,14 +217,15 @@ struct HighlightService {
                     segments: [TranscriptSegment]? = nil,
                     vertical: Bool = true,
                     subtitles: Bool = true,
-                    name: String? = nil) async throws -> MergeResponse {
+                    name: String? = nil,
+                    outputDir: String? = nil) async throws -> MergeResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("merge"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 900  // re-encoding + concatenating several spans can take a while
 
         request.httpBody = try JSONEncoder().encode(
-            MergeRequest(videoPath: videoPath, clips: clips, name: name,
+            MergeRequest(videoPath: videoPath, clips: clips, name: name, outputDir: outputDir,
                          vertical: vertical, subtitles: subtitles, segments: segments))
 
         let data: Data

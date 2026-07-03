@@ -9,4 +9,4 @@ source venv/bin/activate
 # Override where the fine-tuned detector/reranker live, if needed.
 export TLDW_MODELS_DIR="${TLDW_MODELS_DIR:-../poc-content-highlighter/models}"
 
-exec uvicorn server:app --host 127.0.0.1 --port 8000
+exec uvicorn server:app --host 127.0.0.1 --port 8000 --reload

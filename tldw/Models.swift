@@ -214,6 +214,8 @@ struct ClipRequest: Codable {
     let clips: [ClipSpan]
     /// Output subfolder name; nil lets the backend use the source file's stem.
     let name: String?
+    /// User-chosen destination folder; nil falls back to the backend default.
+    let outputDir: String?
     /// Render 1080×1920 portrait Shorts, and burn karaoke captions (libass permitting).
     let vertical: Bool
     let subtitles: Bool
@@ -223,6 +225,7 @@ struct ClipRequest: Codable {
     enum CodingKeys: String, CodingKey {
         case clips, name, vertical, subtitles, segments
         case videoPath = "video_path"
+        case outputDir = "output_dir"
     }
 }
 
@@ -264,6 +267,8 @@ struct MergeRequest: Codable {
     let clips: [ClipSpan]
     /// Output file stem; nil lets the backend use `<source>_merged`.
     let name: String?
+    /// User-chosen destination folder; nil falls back to the backend default.
+    let outputDir: String?
     /// Render 1080×1920 portrait, and burn karaoke captions (libass permitting).
     let vertical: Bool
     let subtitles: Bool
@@ -273,6 +278,7 @@ struct MergeRequest: Codable {
     enum CodingKeys: String, CodingKey {
         case clips, name, vertical, subtitles, segments
         case videoPath = "video_path"
+        case outputDir = "output_dir"
     }
 }
 

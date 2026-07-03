@@ -177,7 +177,9 @@ def _render(video_path: str, clean_audio_path, start: float, duration: float,
                   "[bg][fg]overlay=(W-w)/2:(H-h)/2")
         if ass_path:
             vgraph += f",subtitles='{_ass_escape(ass_path)}'"
-        vgraph += ",scale=1080:1920[outv]"
+        # setsar=1 forces square pixels so no player stretches the portrait frame
+        # horizontally (guards against a non-1 sample aspect ratio from the source).
+        vgraph += ",scale=1080:1920,setsar=1[outv]"
         chains.append(vgraph)
         video_map = ["-map", "[outv]"]
     elif ass_path:

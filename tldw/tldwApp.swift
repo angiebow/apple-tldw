@@ -10,7 +10,7 @@ import SwiftUI
 @main
 struct tldwApp: App {
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("ViReel") {
             ContentView()
         }
     }
