@@ -2,7 +2,7 @@
 Group word-level timestamps into subtitle cues (line-grouped, duration-capped).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List
 
 SENTENCE_ENDERS = (".", "!", "?")
@@ -14,7 +14,8 @@ class SubtitleCue:
     start: float
     end: float
     text: str
-    low_confidence: bool = False  # True if any word in this cue was below threshold
+    words: List[Dict] = field(default_factory=list)  # raw word dicts — needed for karaoke (ASS) rendering
+    low_confidence: bool = False
 
 
 def build_cues(
@@ -27,16 +28,13 @@ def build_cues(
     flag_confidence: float = 0.6,
 ) -> List[SubtitleCue]:
     """
-    Greedily pack words into cues. NEVER drops words for confidence reasons
-    anymore — a dropped word breaks grammar and is more visibly wrong than
-    a low-confidence word displayed as-is. Function words ("going", "the",
-    "would") routinely score low and are usually transcribed correctly
-    anyway; dropping them produces broken English, not cleaner subtitles.
+    Greedily pack words into cues. Never drops words — see prior notes on
+    why dropping low-confidence words breaks grammar more visibly than
+    displaying them as-is.
 
-    Instead, cues containing any word below `flag_confidence` are marked
-    `low_confidence=True` so a later rendering step (step 8) can style
-    them differently (e.g. dim/different color) if desired — purely
-    cosmetic, never affects what text appears.
+    Each cue now retains its raw word list (cue.words) in addition to the
+    joined display text (cue.text). SRT rendering only needs cue.text;
+    karaoke (ASS) rendering needs cue.words for per-word timing.
     """
     if not words:
         return []
@@ -56,7 +54,8 @@ def build_cues(
         text = _wrap_text(" ".join(w["word"].strip() for w in buf), max_chars_per_line)
         flagged = any(w.get("probability", 1.0) < flag_confidence for w in buf)
         cues.append(SubtitleCue(
-            index=len(cues) + 1, start=start, end=end, text=text, low_confidence=flagged
+            index=len(cues) + 1, start=start, end=end, text=text,
+            words=list(buf), low_confidence=flagged,
         ))
         buf.clear()
 
