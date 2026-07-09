@@ -62,6 +62,13 @@ backend/models/
 *.pth
 *.ckpt
 
+# ── Archives & large media (regenerable / local only) ──
+*.zip
+*.mov
+*.mp4
+# Python virtualenvs (any name, not just .venv)
+venv/
+
 # ── ML datasets & trained model artifacts (too large for git) ──
 # Trained checkpoints / fine-tuned models (regenerable via the training notebooks)
 models/

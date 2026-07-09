@@ -540,6 +540,16 @@ class ClipRequest(BaseModel):
     segments: Optional[list[TranscriptSegmentIn]] = None
 
 
+class MusicPlacement(BaseModel):
+    """One background-music bed placed freely on the merged timeline: it starts
+    at `start` seconds, plays for `duration` seconds (looping the WAV if shorter),
+    at `volume` under the speech. Set by the editor's draggable/cuttable lane."""
+    b64: str                              # base64 WAV bed (from /backsound)
+    start: float = 0.0                    # start position on the merged timeline (s)
+    duration: float                       # how long the bed plays (s) — the cut length
+    volume: float = 0.35
+
+
 class MergeRequest(BaseModel):
     video_path: str                       # absolute path to the source video (local)
     clips: list[ClipSpan]                 # spans to concatenate into one Short, in order
@@ -547,6 +557,10 @@ class MergeRequest(BaseModel):
     output_dir: Optional[str] = None      # user-chosen destination folder (else CLIPS_OUT_DIR/<name>)
     vertical: bool = True                 # render 1080×1920 portrait
     subtitles: bool = True                # burn karaoke captions (needs ffmpeg libass)
+    # Background-music beds placed on the merged timeline (draggable/cuttable in
+    # the editor). When present, per-clip `music_b64` is ignored and these are
+    # mixed over the concatenated video instead.
+    music: Optional[list[MusicPlacement]] = None
     # Full transcript segments with per-word times; words overlapping each span
     # caption it. Optional (no words → no captions).
     segments: Optional[list[TranscriptSegmentIn]] = None
@@ -832,11 +846,17 @@ def merge(req: MergeRequest):
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{name}.mp4")
 
+    # Timeline-placed music beds (start/duration/volume on the merged timeline).
+    music = [{"b64": mp.b64, "start": mp.start, "duration": mp.duration,
+              "volume": mp.volume}
+             for mp in (req.music or []) if mp.b64 and mp.duration > 0] or None
+
     mod = _load_clipper()
     subtitles_applied = req.subtitles and mod.ffmpeg_has_subtitles()
     try:
         written = mod.merge_clips(path, spans, out_path,
-                                  vertical=req.vertical, subtitles=req.subtitles)
+                                  vertical=req.vertical, subtitles=req.subtitles,
+                                  music=music)
     except Exception as exc:  # ffmpeg failure / bad path → 500 with the reason
         detail = getattr(exc, "stderr", None) or str(exc)
         if isinstance(detail, bytes):

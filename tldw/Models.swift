@@ -261,6 +261,16 @@ struct ClipResponse: Codable {
     }
 }
 
+/// One background-music bed placed freely on the merged timeline: it starts at
+/// `start` seconds, plays for `duration` seconds (looping the WAV if shorter), at
+/// `volume` under the speech. Set by the editor's draggable/cuttable Backsound lane.
+struct MusicPlacement: Codable {
+    let b64: String
+    let start: Double
+    let duration: Double
+    let volume: Double
+}
+
 /// Request body for `POST /merge` — concatenate selected spans into one Short.
 struct MergeRequest: Codable {
     let videoPath: String
@@ -272,11 +282,14 @@ struct MergeRequest: Codable {
     /// Render 1080×1920 portrait, and burn karaoke captions (libass permitting).
     let vertical: Bool
     let subtitles: Bool
+    /// Music beds placed on the merged timeline (draggable/cuttable). When present,
+    /// per-clip `ClipSpan.musicB64` is ignored and these are mixed over the merge.
+    let music: [MusicPlacement]?
     /// Full transcript segments (with per-word times) used to caption the Short.
     let segments: [TranscriptSegment]?
 
     enum CodingKeys: String, CodingKey {
-        case clips, name, vertical, subtitles, segments
+        case clips, name, vertical, subtitles, segments, music
         case videoPath = "video_path"
         case outputDir = "output_dir"
     }

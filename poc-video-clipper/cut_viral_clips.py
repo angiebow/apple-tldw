@@ -307,12 +307,55 @@ def _concat(paths: list, output_path: str) -> None:
         os.unlink(list_path)
 
 
+def _mix_music_over(video_path: str, beds: list, output_path: str) -> None:
+    """Mix free-floating music ``beds`` over an already-rendered video's audio.
+
+    Each bed is ``{path, start, duration, volume}`` positioned on the *output*
+    timeline: it begins at ``start`` seconds, plays for ``duration`` seconds
+    (looping the source WAV if it is shorter), at ``volume`` under the speech.
+    Video is stream-copied; only the audio is re-encoded (aac)."""
+    cmd = ["ffmpeg", "-y", "-i", video_path]
+    for bed in beds:
+        # -stream_loop -1 loops each (short) bed so atrim can cut it to length.
+        cmd += ["-stream_loop", "-1", "-i", bed["path"]]
+
+    chains: list[str] = []
+    labels: list[str] = []
+    for i, bed in enumerate(beds, start=1):        # input 0 is the video
+        dur = max(0.01, float(bed["duration"]))
+        delay_ms = int(round(max(0.0, float(bed["start"])) * 1000))
+        vol = float(bed.get("volume", 0.35))
+        # trim the looped bed to length, reset its PTS, set level, then delay it
+        # to its start position on the timeline.
+        chains.append(
+            f"[{i}:a]atrim=0:{dur:.3f},asetpts=PTS-STARTPTS,"
+            f"volume={vol},adelay={delay_ms}:all=1[b{i}]")
+        labels.append(f"[b{i}]")
+
+    # amix the speech (video's own audio) with every delayed bed; duration=first
+    # keeps the video's length, normalize=0 preserves each input's level.
+    mix_inputs = "[0:a]" + "".join(labels)
+    chains.append(
+        f"{mix_inputs}amix=inputs={len(beds) + 1}:duration=first:normalize=0[aout]")
+
+    cmd += ["-filter_complex", ";".join(chains),
+            "-map", "0:v", "-map", "[aout]",
+            "-c:v", "copy", "-c:a", "aac", output_path]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
 def merge_clips(video_path: str, clips: list, output_path: str,
                 clean_audio_path: str = None,
-                vertical: bool = True, subtitles: bool = True) -> str:
+                vertical: bool = True, subtitles: bool = True,
+                music: list = None) -> str:
     """Render each ``{start, end, text[, words]}`` span as a portrait+captioned
     segment (same pipeline as :func:`cut_clips`), then concatenate the segments
     into a single Short at *output_path*.
+
+    When *music* is given (list of ``{b64, start, duration, volume}`` placements
+    on the merged timeline), the per-clip beds are ignored and the music is mixed
+    over the *concatenated* video instead — so each bed can start at any timestamp
+    and run any length, independent of the clip boundaries.
 
     Returns the absolute path to the written merged .mp4.
 
@@ -327,16 +370,42 @@ def merge_clips(video_path: str, clips: list, output_path: str,
     out_abs = os.path.abspath(output_path)
     os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
 
+    # With timeline-placed music, render the segments *without* their per-clip
+    # beds — the beds are mixed over the whole merged video afterwards.
+    seg_clips = clips
+    if music:
+        seg_clips = [{k: v for k, v in c.items() if k != "music_b64"} for c in clips]
+
     with tempfile.TemporaryDirectory(prefix="tldw_merge_") as seg_dir:
-        segments = cut_clips(video_path, clips, seg_dir,
+        segments = cut_clips(video_path, seg_clips, seg_dir,
                              clean_audio_path=clean_audio_path,
                              vertical=vertical, subtitles=subtitles)
         if not segments:
             raise ValueError("No valid clip spans to merge.")
+
+        # Concatenate first (into a temp when we still have music to overlay).
+        concat_target = out_abs if not music else os.path.join(seg_dir, "_merged.mp4")
         if len(segments) == 1:
-            shutil.copyfile(segments[0], out_abs)
+            shutil.copyfile(segments[0], concat_target)
         else:
-            _concat(segments, out_abs)
+            _concat(segments, concat_target)
+
+        # Materialise the music beds and mix them over the merged timeline.
+        beds = []
+        for i, bed in enumerate(music or []):
+            if not bed.get("b64") or float(bed.get("duration", 0)) <= 0:
+                continue
+            bed_path = os.path.join(seg_dir, f"bed_{i:02d}.wav")
+            with open(bed_path, "wb") as bf:
+                bf.write(base64.b64decode(bed["b64"]))
+            beds.append({"path": bed_path, "start": float(bed.get("start", 0)),
+                         "duration": float(bed["duration"]),
+                         "volume": float(bed.get("volume", 0.35))})
+        if beds:
+            _mix_music_over(concat_target, beds, out_abs)
+        elif music:
+            # music requested but nothing usable — keep the plain merged video.
+            shutil.copyfile(concat_target, out_abs)
     return out_abs
 
 

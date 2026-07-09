@@ -218,7 +218,8 @@ struct HighlightService {
                     vertical: Bool = true,
                     subtitles: Bool = true,
                     name: String? = nil,
-                    outputDir: String? = nil) async throws -> MergeResponse {
+                    outputDir: String? = nil,
+                    music: [MusicPlacement]? = nil) async throws -> MergeResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("merge"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -226,7 +227,7 @@ struct HighlightService {
 
         request.httpBody = try JSONEncoder().encode(
             MergeRequest(videoPath: videoPath, clips: clips, name: name, outputDir: outputDir,
-                         vertical: vertical, subtitles: subtitles, segments: segments))
+                         vertical: vertical, subtitles: subtitles, music: music, segments: segments))
 
         let data: Data
         let response: URLResponse

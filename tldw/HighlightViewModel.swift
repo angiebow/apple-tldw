@@ -20,6 +20,11 @@ final class HighlightViewModel {
     var modelInfo: ModelInfo?
     var lineCount: Int = 0
     var isLoading = false
+    /// Which pipeline phase the loading screen is on: 0 = transcribing (extract →
+    /// clean → Whisper), 1 = ranking (summarize → embed → score), 2 = done.
+    /// The emoji step-list on the loading screen reads this to mark stages
+    /// done / active / pending.
+    var loadingStage = 0
     var statusMessage = "Start the backend, then drop in a recording to generate Shorts."
     var serverReachable: Bool?
     /// The recording this transcript came from — the editor cuts clips from it.
@@ -41,10 +46,11 @@ final class HighlightViewModel {
     /// so both stages run under a single loading state (media in → Shorts out).
     func transcribeAndHighlight(at url: URL) async {
         isLoading = true
+        loadingStage = 0
         defer { isLoading = false }
 
         // ── 1. Extract audio + transcribe (backend preprocess + Whisper) ──
-        statusMessage = "Extracting audio and transcribing… first run downloads the Whisper model."
+        statusMessage = "Pulling the audio out, cleaning it up, and transcribing every word. The first run downloads the Whisper model, so give it a minute."
         let transcript: String
         let segments: [TranscriptSegment]
         do {
@@ -71,7 +77,8 @@ final class HighlightViewModel {
 
         // ── 2. Summarize, embed, and score the transcribed lines ──
         // Pass segments so each ranked line keeps its start/end span (for clipping).
-        statusMessage = "Summarizing, embedding, and scoring lines… first run downloads the models."
+        loadingStage = 1
+        statusMessage = "Summarizing what was said, then scoring every line for relevance and viral potential. The first run downloads the ranking models."
         do {
             let title = videoTitle.trimmingCharacters(in: .whitespacesAndNewlines)
             let response = try await service.highlight(transcript,
@@ -82,6 +89,7 @@ final class HighlightViewModel {
             viralLines = response.viral
             modelInfo = response.models
             lineCount = response.lineCount
+            loadingStage = 2
             statusMessage = "Done — ranked \(response.lineCount) lines."
             serverReachable = true
         } catch {
