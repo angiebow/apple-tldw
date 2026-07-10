@@ -159,7 +159,8 @@ def backsound(payload: Dict[str, Any] = Body(...), _: None = Depends(require_aut
 
 # ── Dev-only storage routes (stand in for S3/GCS/R2 presigned PUT/GET) ──────
 @app.put("/storage/{key:path}")
-async def storage_put(key: str, request: Request) -> Dict[str, Any]:
+async def storage_put(key: str, request: Request,
+                      _: None = Depends(require_auth)) -> Dict[str, Any]:
     body = await request.body()
     if config.MAX_UPLOAD_BYTES and len(body) > config.MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Upload exceeds size limit.")
@@ -171,7 +172,7 @@ async def storage_put(key: str, request: Request) -> Dict[str, Any]:
 
 
 @app.get("/storage/{key:path}")
-def storage_get(key: str) -> FileResponse:
+def storage_get(key: str, _: None = Depends(require_auth)) -> FileResponse:
     try:
         path = app.state.storage.abs_path(key)
     except ValueError as exc:
