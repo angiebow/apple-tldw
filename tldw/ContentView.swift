@@ -7,11 +7,23 @@
 //   • results  — "Here are your Shorts": a card grid of the top-ranked lines
 //
 
+#if os(macOS)
 import SwiftUI
 import AppKit
 import AVFoundation
 import AVKit
+import Combine
 import UniformTypeIdentifiers
+import tldwKit
+
+/// One user-facing step on the loading screen. `group` maps to the ViewModel's
+/// `loadingStage` (0 = transcribe, 1 = rank) so the row can show done/running/next.
+private struct PipelineStep: Identifiable {
+    let id = UUID()
+    let emoji: String
+    let label: String
+    let group: Int
+}
 
 struct ContentView: View {
     @State private var model = HighlightViewModel()
@@ -24,7 +36,14 @@ struct ContentView: View {
     @State private var detailLine: LineScore?
     @State private var showEditor = false
     @State private var isDropTargeted = false
-    @AppStorage("isDarkMode") private var isDarkMode = false
+    @State private var loadingPulse = false
+    /// Which pipeline step card is on screen (0…5). Auto-advances within the
+    /// active phase, then slides on to the next as the real backend stage moves.
+    @State private var visibleStep = 0
+    /// Ticks the step carousel forward while a phase runs (we don't get per-substep
+    /// signals from the backend, so substeps within a phase advance on a cadence).
+    private let stepTimer = Timer.publish(every: 2.4, on: .main, in: .common).autoconnect()
+    @AppStorage("isDarkMode") private var isDarkMode = true
 
     /// All ranked lines keyed by their global line index (both lists share the
     /// same `lines` array, so ids are consistent across categories).
@@ -55,7 +74,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color(nsColor: .windowBackgroundColor).ignoresSafeArea()
+            AppBackground()
             Group {
                 if model.isLoading {
                     loadingView
@@ -124,25 +143,149 @@ struct ContentView: View {
 
     // MARK: - Loading
 
+    /// The backend pipeline, as user-facing steps with an emoji for each. `stage`
+    /// is the ViewModel's `loadingStage` (0 = transcribe group, 1 = rank group):
+    /// a step whose group is below `stage` is done, equal is running, above is next.
+    private static let pipelineSteps: [PipelineStep] = [
+        PipelineStep(emoji: "🎬", label: "Extracting the audio from your video", group: 0),
+        PipelineStep(emoji: "🎚️", label: "Cleaning & leveling the sound",        group: 0),
+        PipelineStep(emoji: "🗣️", label: "Transcribing every word with Whisper",  group: 0),
+        PipelineStep(emoji: "🧠", label: "Summarizing what the video is about",    group: 1),
+        PipelineStep(emoji: "🧮", label: "Scoring each line for relevance",        group: 1),
+        PipelineStep(emoji: "🔥", label: "Ranking the most viral-worthy moments",  group: 1),
+    ]
+
+    // ── Step carousel bounds ────────────────────────────────────────────────
+    // Each phase (loadingStage) owns a contiguous slice of the 6 steps. The
+    // visible card advances within its phase's slice and never runs ahead of the
+    // real backend stage.
+    private func phaseFirstStep(_ stage: Int) -> Int { stage <= 0 ? 0 : 3 }
+    private func phaseLastStep(_ stage: Int) -> Int { stage <= 0 ? 2 : 5 }
+    private var isDone: Bool { model.loadingStage >= 2 }
+
+    /// Move the carousel one step forward, but not past the current phase's last
+    /// step (we hold there until the backend advances the phase).
+    private func advanceStep() {
+        guard !isDone else { return }
+        let last = phaseLastStep(model.loadingStage)
+        if visibleStep < last {
+            withAnimation(.easeInOut(duration: 0.5)) { visibleStep += 1 }
+        }
+    }
+
     private var loadingView: some View {
-        VStack(spacing: 14) {
-            ProgressView()
-            Text("Generating your Shorts…")
-                .font(.title3.weight(.medium))
-            Text(model.statusMessage)
-                .font(.callout).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+        VStack(spacing: 22) {
+            VStack(spacing: 6) {
+                Text("Generating your Shorts…")
+                    .font(.title2.weight(.semibold))
+                Text(model.statusMessage)
+                    .font(.callout).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            stepCard
+
+            stepDots
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { loadingPulse = true; visibleStep = phaseFirstStep(model.loadingStage) }
+        .onReceive(stepTimer) { _ in advanceStep() }
+        // When the backend moves to the next phase, slide on to its first step.
+        .onChange(of: model.loadingStage) { _, stage in
+            let first = phaseFirstStep(stage)
+            if visibleStep < first {
+                withAnimation(.easeInOut(duration: 0.5)) { visibleStep = first }
+            }
+        }
+    }
+
+    /// One card, one step at a time. The face slides horizontally (out to the
+    /// left, in from the right) each time the step advances. `isDone` shows a
+    /// wrap-up face on the same card.
+    private var stepCard: some View {
+        let shape = RoundedRectangle(cornerRadius: ViReel.rCard, style: .continuous)
+        return ZStack {
+            stepFace(index: isDone ? Self.pipelineSteps.count : visibleStep)
+                .id(isDone ? -1 : visibleStep)
+                .transition(.asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    removal: .move(edge: .leading).combined(with: .opacity)))
+        }
+        .frame(maxWidth: 460)
+        .frame(height: 250)
+        .background(.ultraThinMaterial, in: shape)
+        .overlay(shape.strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+        .clipShape(shape)
+        .shadow(color: .black.opacity(0.28), radius: 24, y: 12)
+        .animation(.easeInOut(duration: 0.5), value: visibleStep)
+        .animation(.easeInOut(duration: 0.5), value: isDone)
+    }
+
+    /// The face for one step (or the done state) — a big, headphone-sized symbol
+    /// with the step's label and a small "Step n of 6" caption.
+    @ViewBuilder
+    private func stepFace(index: Int) -> some View {
+        if index >= Self.pipelineSteps.count {
+            VStack(spacing: 16) {
+                Text("🎉").font(.system(size: 60))
+                Text("Ranked and ready!")
+                    .font(.title3.weight(.semibold))
+            }
+            .padding(28).frame(maxWidth: .infinity)
+        } else {
+            let step = Self.pipelineSteps[index]
+            VStack(spacing: 16) {
+                Text(step.emoji)
+                    .font(.system(size: 60))
+                    .scaleEffect(loadingPulse ? 1.06 : 0.9)
+                    .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                               value: loadingPulse)
+                Text(step.label)
+                    .font(.title3.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Step \(index + 1) of \(Self.pipelineSteps.count)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(28).frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Row of dots under the card: done steps filled with the accent, the current
+    /// one enlarged, the rest dim.
+    private var stepDots: some View {
+        HStack(spacing: 8) {
+            ForEach(Self.pipelineSteps.indices, id: \.self) { i in
+                let filled = isDone || i <= visibleStep
+                let current = !isDone && i == visibleStep
+                Circle()
+                    .fill(filled ? AnyShapeStyle(ViReel.accentGradient)
+                                 : AnyShapeStyle(Color.secondary.opacity(0.3)))
+                    .frame(width: current ? 9 : 6, height: current ? 9 : 6)
+                    .animation(.easeInOut(duration: 0.3), value: visibleStep)
+            }
+        }
     }
 
     // MARK: - Input state
 
     private var inputView: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top) {
-                titleBlock(emoji: "🩳", title: "Generate Shorts",
+            HStack(alignment: .top, spacing: 16) {
+                Image("VireelLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 60, height: 60)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: .black.opacity(0.28), radius: 5, y: 2)
+                    .accessibilityLabel("ViReel")
+                titleBlock(emoji: "", title: "Generate Shorts",
                            subtitle: "Drop in a recording — ViReel extracts the audio, transcribes it, then finds the most relevant and viral-worthy lines.")
                 Spacer()
                 HStack(spacing: 10) {
@@ -180,11 +323,11 @@ struct ContentView: View {
                 .textFieldStyle(.plain)
                 .font(.title3)
                 .padding(.horizontal, 14).padding(.vertical, 11)
-                .background(Color(nsColor: .textBackgroundColor),
-                            in: RoundedRectangle(cornerRadius: 10))
+                .background(.ultraThinMaterial,
+                            in: RoundedRectangle(cornerRadius: ViReel.rControl, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: ViReel.rControl, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
                 )
             Text("Helps ViReel summarize the transcript around what the video is about.")
                 .font(.caption).foregroundStyle(.tertiary)
@@ -196,13 +339,14 @@ struct ContentView: View {
     private var mediaDropZone: some View {
         Button { pickAndTranscribe() } label: {
             ZStack {
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [7]))
-                    .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.45))
+                    .foregroundStyle(isDropTargeted ? ViReel.accentWarm : Color.white.opacity(0.3))
                 VStack(spacing: 10) {
                     Image(systemName: "waveform.badge.plus")
                         .font(.system(size: 40))
-                        .foregroundStyle(isDropTargeted ? Color.accentColor : .secondary)
+                        .foregroundStyle(isDropTargeted ? AnyShapeStyle(ViReel.accentGradient)
+                                                         : AnyShapeStyle(Color.secondary))
                     Text(isDropTargeted ? "Drop to transcribe" : "Drag an audio or video recording here")
                         .font(.title3.weight(.medium))
                     Text("or click to browse — the extracted audio is transcribed, then ranked into Shorts")
@@ -213,9 +357,13 @@ struct ContentView: View {
                 .padding(24)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(isDropTargeted ? Color.accentColor.opacity(0.08) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 16))
-            .contentShape(RoundedRectangle(cornerRadius: 16))
+            .background(.ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(isDropTargeted ? ViReel.accentWarm.opacity(0.10) : Color.clear)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .buttonStyle(.plain)
         .dropDestination(for: URL.self) { urls, _ in handleDrop(urls) }
@@ -358,9 +506,7 @@ struct ContentView: View {
                     .padding(12)
             }
             .frame(maxHeight: 200)
-            .background(Color(nsColor: .controlBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+            .glassPanel(cornerRadius: ViReel.rControl, shadowRadius: 10)
             .padding(.top, 6)
         } label: {
             Label(label, systemImage: systemImage).font(.callout.weight(.medium))
@@ -388,7 +534,7 @@ struct ContentView: View {
                 Button { showEditor = true } label: {
                     Label("Edit \(selectedOrder.count) selected", systemImage: "slider.horizontal.below.rectangle")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.pill)
             }
 
             Button { model.reset() } label: {
@@ -403,7 +549,7 @@ struct ContentView: View {
     private func titleBlock(emoji: String, title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
-                Text(emoji).font(.system(size: 34))
+                if !emoji.isEmpty { Text(emoji).font(.system(size: 34)) }
                 Text(title).font(.system(size: 34, weight: .bold))
             }
             Text(subtitle)
@@ -440,17 +586,22 @@ private struct ShortCard: View {
         return String(format: "#%d · %@ %.2f", rank, tag, primaryScore)
     }
 
+    @State private var hovering = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 8) {
+                // Gradient rank chip — the reference's little "Trending" pills.
                 Text(label)
                     .font(.caption.weight(.semibold))
                     .tracking(0.8)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(ViReel.accentGradient, in: Capsule())
                 if line.viralLabel {
                     Image(systemName: "checkmark.seal.fill")
                         .font(.caption2)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(ViReel.accentWarm)
                         .help("Detector: viral-worthy")
                 }
             }
@@ -471,9 +622,16 @@ private struct ShortCard: View {
                 Button {
                     isSelected.toggle()
                 } label: {
-                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 24))
-                        .foregroundStyle(isSelected ? Color.blue : Color.secondary)
+                    ZStack {
+                        Circle()
+                            .fill(isSelected ? AnyShapeStyle(ViReel.accentGradient)
+                                             : AnyShapeStyle(Material.ultraThin))
+                            .frame(width: 30, height: 30)
+                            .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+                        Image(systemName: isSelected ? "checkmark" : "plus")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(isSelected ? .white : .secondary)
+                    }
                 }
                 .buttonStyle(.plain)
                 .help(isSelected ? "Selected" : "Select this Short")
@@ -481,11 +639,15 @@ private struct ShortCard: View {
         }
         .padding(22)
         .frame(maxWidth: .infinity, minHeight: 210, alignment: .topLeading)
-        .background(Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.quaternary, lineWidth: 1))
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
-        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .glassCard()
+        .overlay(
+            RoundedRectangle(cornerRadius: ViReel.rCard, style: .continuous)
+                .strokeBorder(ViReel.accentGradient, lineWidth: isSelected ? 1.5 : 0)
+        )
+        .scaleEffect(hovering ? 1.015 : 1)
+        .animation(.easeOut(duration: 0.16), value: hovering)
+        .onHover { hovering = $0 }
+        .contentShape(RoundedRectangle(cornerRadius: ViReel.rCard, style: .continuous))
         .onTapGesture { onOpen() }
         .help("Open full line")
     }
@@ -572,7 +734,7 @@ private struct ShortDetailView: View {
                     .foregroundStyle(.secondary)
                 if line.viralLabel {
                     Label("viral-worthy", systemImage: "checkmark.seal.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(ViReel.accentWarm)
                 }
                 Spacer()
                 scorePill("relevance", line.relevance)
@@ -585,11 +747,14 @@ private struct ShortDetailView: View {
             HStack {
                 Spacer()
                 Button("Done") { dismiss() }
+                    .buttonStyle(.pill)
                     .keyboardShortcut(.defaultAction)
             }
         }
         .padding(24)
         .frame(width: 560, height: 560)
+        // Make the sheet itself frosted glass to match the app.
+        .presentationBackground(.ultraThinMaterial)
     }
 
     private func scorePill(_ label: String, _ value: Double) -> some View {
@@ -598,7 +763,8 @@ private struct ShortDetailView: View {
             Text(String(format: "%.2f", value)).font(.caption.monospacedDigit())
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(Color.secondary.opacity(0.15), in: Capsule())
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
     }
 
     private func timecode(_ s: Double) -> String {
@@ -621,14 +787,20 @@ private struct ShortDetailView: View {
         if !loaded { loadAndPlay(); return }
         stopObserver()
         player.pause()
+        let endTime = CMTime(seconds: e, preferredTimescale: 600)
+        // Stop exactly at the line's end — see EditorView.playSpan: a boundary
+        // observer alone can miss the crossing and play past the clip.
+        player.currentItem?.forwardPlaybackEndTime = endTime
+        player.actionAtItemEnd = .pause
         player.seek(to: CMTime(seconds: s, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero) { _ in player.play() }
         endObserver = player.addBoundaryTimeObserver(
-            forTimes: [NSValue(time: CMTime(seconds: e, preferredTimescale: 600))], queue: .main
+            forTimes: [NSValue(time: endTime)], queue: .main
         ) { [weak player] in player?.pause() }
     }
 
     private func stopObserver() {
+        player.currentItem?.forwardPlaybackEndTime = .invalid
         if let endObserver { player.removeTimeObserver(endObserver); self.endObserver = nil }
     }
 }
@@ -678,7 +850,6 @@ private struct EditorView: View {
     }
     @State private var selection: Selection?
     @State private var marked: Set<Selection> = []   // clips ticked for merging
-    @State private var showMergePreview = false
     /// Transient note shown when a merge-mark switches kinds (bloopers ↔ transcript).
     @State private var mergeModeNote: String?
     /// The transcript clip being interactively dragged, and the live pointer x
@@ -690,16 +861,81 @@ private struct EditorView: View {
     @State private var bloopDragX: CGFloat = 0
 
     // Detected blooper (dead-air) spans, surfaced into the same timeline sequence.
+    // Detection is manual — triggered from the backsong bar, not on load.
     @State private var bloopers: [BlooperSpan] = []
     @State private var blooperVideoURL: URL?
+    @State private var isDetectingBloopers = false
+    @State private var blooperDetectError: String?
+    /// User-resizable preview height; width derives from the orientation aspect.
+    /// `previewDragBase` anchors the drag so the handle resizes smoothly.
+    @State private var previewHeight: CGFloat = 460
+    @State private var previewDragBase: CGFloat = 460
+    /// True while the whole-sequence preview is playing (drives the Play/Pause button).
+    @State private var isSequencePlaying = false
     @State private var bigPlayer = AVPlayer()       // drives the top preview (sentence clips + blooper spans)
     @State private var bigEndObserver: Any?
     @State private var loadedURL: URL?              // which file bigPlayer currently holds
+    /// Live playhead position (pixels along the timeline) as the preview plays —
+    /// drawn as a moving stamp over the Transcript + Backsound lanes.
+    @State private var bigTimeObserver: Any?
+    @State private var playheadX: CGFloat?
+    /// When true, `bigPlayer` holds a composition of the whole transcript sequence
+    /// (all clips end to end) so playback sweeps the timeline — only the clip and
+    /// backsong under the playhead are heard. False while a blooper span plays.
+    @State private var playingSequence = false
+    @State private var compWords: [TranscriptWord] = []   // caption words on the sequence timeline
+    @State private var activeBedIndex: Int?               // clip id whose bed is currently playing
+    @State private var builtSignature: String?            // clip layout the composition was built from
 
     /// The marked clips in timeline order (sentences first, then bloopers).
     private var mergeItems: [MergeClip] {
         clips.filter { marked.contains(.sentence($0.id)) }.map { MergeClip.sentence($0) }
         + bloopers.filter { marked.contains(.blooper($0.id)) }.map { MergeClip.blooper($0) }
+    }
+
+    /// Merge the marked clips (transcript lines + blooper spans) into one captioned
+    /// 9:16 Short via the backend, then reveal it in Finder. Music beds are placed
+    /// on the merged timeline at each clip's offset + its drag delay / trim length.
+    private func mergeAndExport() {
+        guard let videoURL = sourceVideoURL ?? blooperVideoURL else { return }
+        let items = mergeItems
+        let spans: [ClipSpan] = items.compactMap { $0.clipSpan }
+        guard !spans.isEmpty else {
+            exportError = "None of the marked clips have timecodes to cut."
+            return
+        }
+        var cursor = 0.0
+        var music: [MusicPlacement] = []
+        for item in items {
+            let dur = item.seconds
+            if case .sentence(let c) = item, let bed = bedByClip[c.id] {
+                music.append(MusicPlacement(b64: bed.audioB64,
+                                            start: max(0, cursor + bedDelay(c.id)),
+                                            duration: bedLen(c),
+                                            volume: bedVolume(c.id)))
+            }
+            cursor += dur
+        }
+        isExporting = true
+        exportError = nil
+        exportNotice = nil
+        Task {
+            defer { isExporting = false }
+            do {
+                let result = try await service.mergeClips(
+                    videoPath: videoURL.path, clips: spans, segments: transcriptSegments,
+                    vertical: true, subtitles: captionsOn,
+                    outputDir: exportFolder.isEmpty ? nil : exportFolder,
+                    music: music.isEmpty ? nil : music)
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.path)])
+                if result.subtitlesRequested && !result.subtitlesApplied {
+                    exportNotice = "Exported your Short, but karaoke captions were skipped — this "
+                        + "ffmpeg has no subtitles support (install an ffmpeg built with libass)."
+                }
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
     }
 
     // Background music beds are generated per clip, on demand, for the selected clip.
@@ -711,10 +947,229 @@ private struct EditorView: View {
     /// sync with the clip preview.
     @State private var bedVolumeByClip: [Int: Double] = [:]
     @State private var bedPlayer: AVAudioPlayer?
+    /// Backsound placement on the timeline, stored relative to the clip it scores:
+    /// `delay` = seconds from the clip's start where the bed begins (can be negative
+    /// to start earlier on the timeline); `len` = how long the bed plays (the cut).
+    @State private var bedDelayByClip: [Int: Double] = [:]
+    @State private var bedLenByClip: [Int: Double] = [:]
+    /// Live move-drag / trim state for the Backsound lane (pixels).
+    @State private var draggingBedID: Int?
+    @State private var bedDragDX: CGFloat = 0
+    @State private var trimmingBedID: Int?
+    @State private var bedTrimDW: CGFloat = 0
     private let service = HighlightService()
 
     private static let defaultBedVolume = 0.35
     private func bedVolume(_ id: Int) -> Double { bedVolumeByClip[id] ?? Self.defaultBedVolume }
+
+    /// Seconds the bed for `id` is offset from its clip's start (0 = under the clip).
+    private func bedDelay(_ id: Int) -> Double { bedDelayByClip[id] ?? 0 }
+    /// Play length (seconds) of the bed for `clip` — defaults to the clip's length.
+    private func bedLen(_ clip: LineScore) -> Double {
+        bedLenByClip[clip.id] ?? clipSeconds(clip)
+    }
+    /// Longest a bed may be stretched: the clip it scores or the generated bed,
+    /// whichever is longer (the render loops a short WAV to fill).
+    private func bedMaxLen(_ clip: LineScore) -> Double {
+        max(clipSeconds(clip), bedByClip[clip.id]?.durationS ?? clipSeconds(clip))
+    }
+    /// Start of `clip` on the timeline (seconds), clips laid end to end.
+    private func clipSecOffset(_ clip: LineScore) -> Double {
+        var acc = 0.0
+        for c in clips { if c.id == clip.id { break }; acc += clipSeconds(c) }
+        return acc
+    }
+
+    /// Left edge (pixels) of a blooper tile in the Bloopers lane.
+    private func bloopPxOffset(_ span: BlooperSpan) -> CGFloat {
+        var x: CGFloat = 0
+        for b in bloopers { if b.id == span.id { break }; x += bloopWidth(b) + Self.clipGap }
+        return x
+    }
+
+    // ── Playhead: a moving stamp showing where the preview is playing ──────────
+
+    /// Watch the preview's clock and map the current source time onto the timeline
+    /// (Transcript/Backsound lanes are seconds-based; the Bloopers lane pixel-based).
+    private func startPlayheadObserver() {
+        guard bigTimeObserver == nil else { return }
+        bigTimeObserver = bigPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main
+        ) { time in updatePlayhead(time.seconds) }
+    }
+
+    private func stopPlayheadObserver() {
+        if let bigTimeObserver { bigPlayer.removeTimeObserver(bigTimeObserver); self.bigTimeObserver = nil }
+    }
+
+    private func updatePlayhead(_ t: Double) {
+        // Keep the Play/Pause button in sync with the actual player state.
+        isSequencePlaying = playingSequence && bigPlayer.timeControlStatus == .playing
+        if playingSequence {
+            // Composition time == timeline seconds (clips laid end to end).
+            playheadX = CGFloat(t) * pxPerSec
+            updateSequenceBed(t)
+        } else if let b = currentBlooper {
+            let clamped = min(max(t, b.start), b.end)
+            playheadX = bloopPxOffset(b) + CGFloat(clamped - b.start) * pxPerSec
+        } else if let c = currentClip, let s = c.start, let e = c.end, e > s {
+            let clamped = min(max(t, s), e)
+            playheadX = CGFloat(clipSecOffset(c) + (clamped - s)) * pxPerSec
+        } else {
+            playheadX = nil
+        }
+    }
+
+    /// Signature of the current clip layout — the composition is rebuilt when it
+    /// changes (reorder / removal / retime), but not for bed edits (played live).
+    private var timelineSignature: String {
+        clips.map { "\($0.id):\($0.start ?? -1):\($0.end ?? -1)" }.joined(separator: "|")
+    }
+
+    /// Build one composition of every timestamped clip laid end to end, so the
+    /// preview can play the whole sequence continuously. Remaps caption words onto
+    /// the composition timeline. Returns false when there is nothing playable.
+    @discardableResult
+    private func buildTimeline() async -> Bool {
+        guard let url = sourceVideoURL else { return false }
+        let asset = AVURLAsset(url: url)
+        let comp = AVMutableComposition()
+        let allWords = transcriptSegments.flatMap { $0.words ?? [] }
+        var cursor = CMTime.zero
+        var caps: [TranscriptWord] = []
+        do {
+            let srcV = try await asset.loadTracks(withMediaType: .video).first
+            let srcA = try await asset.loadTracks(withMediaType: .audio).first
+            let cv = comp.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
+            let ca = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+            for clip in clips {
+                guard let s = clip.start, let e = clip.end, e > s else { continue }
+                let range = CMTimeRange(start: CMTime(seconds: s, preferredTimescale: 600),
+                                        duration: CMTime(seconds: e - s, preferredTimescale: 600))
+                let offset = cursor.seconds
+                for w in allWords where w.start < e && w.end > s {
+                    caps.append(TranscriptWord(word: w.word,
+                                               start: offset + (w.start - s),
+                                               end: offset + (w.end - s)))
+                }
+                if let srcV { try cv?.insertTimeRange(range, of: srcV, at: cursor) }
+                if let srcA { try ca?.insertTimeRange(range, of: srcA, at: cursor) }
+                cursor = cursor + range.duration
+            }
+            guard cursor > .zero else { return false }
+            compWords = caps
+            bigPlayer.replaceCurrentItem(with: AVPlayerItem(asset: comp))
+            loadedURL = nil                 // bigPlayer now holds the composition, not a file
+            playingSequence = true
+            builtSignature = timelineSignature
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Drive the backsong off the sequence clock: whenever the playhead is inside a
+    /// bed's placed window (start = clip offset + drag, length = the cut), loop that
+    /// bed under it; otherwise silence. Windows are read live so drag/trim applies.
+    private func updateSequenceBed(_ now: Double) {
+        var hit: (id: Int, start: Double, b64: String, volume: Float)?
+        for clip in clips {
+            guard let bed = bedByClip[clip.id] else { continue }
+            let start = max(0, clipSecOffset(clip) + bedDelay(clip.id))
+            if now >= start && now < start + bedLen(clip) {
+                hit = (clip.id, start, bed.audioB64, Float(bedVolume(clip.id)))
+                break
+            }
+        }
+        guard let h = hit else {
+            if activeBedIndex != nil { bedPlayer?.stop(); bedPlayer = nil; activeBedIndex = nil }
+            return
+        }
+        if activeBedIndex != h.id {
+            bedPlayer?.stop()
+            if let data = Data(base64Encoded: h.b64), let p = try? AVAudioPlayer(data: data) {
+                p.numberOfLoops = -1
+                p.volume = h.volume
+                p.currentTime = (now - h.start).truncatingRemainder(dividingBy: max(p.duration, 0.01))
+                p.play()
+                bedPlayer = p
+            }
+            activeBedIndex = h.id
+        } else if bigPlayer.timeControlStatus != .playing {
+            bedPlayer?.pause()
+        } else if bedPlayer?.isPlaying == false {
+            bedPlayer?.play()
+        }
+    }
+
+    /// The red playhead line + its timecode stamp, spanning the timeline lanes.
+    private func playheadBar(_ x: CGFloat) -> some View {
+        Rectangle()
+            .fill(Color.red)
+            .frame(width: 2)
+            .frame(maxHeight: .infinity)
+            .allowsHitTesting(false)
+            // Draggable knob at the top — grab it to move the playhead.
+            .overlay(alignment: .top) { playheadKnob }
+            .overlay(alignment: .top) {
+                Text(timecode(Double(x / pxPerSec)))
+                    .font(.system(size: 9, weight: .bold)).monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Color.red, in: RoundedRectangle(cornerRadius: 3))
+                    .fixedSize()
+                    .offset(y: 14)
+                    .allowsHitTesting(false)
+            }
+            .offset(x: x)
+    }
+
+    /// The grabbable head of the playhead. Dragging it scrubs; releasing plays
+    /// from there. Reads pointer x from the timeline coordinate space.
+    private var playheadKnob: some View {
+        Circle()
+            .fill(Color.red)
+            .frame(width: 13, height: 13)
+            .overlay(Circle().strokeBorder(.white, lineWidth: 2))
+            .offset(y: -5)
+            .contentShape(Circle().inset(by: -8))
+            .gesture(scrubGesture)
+            .onHover { $0 ? NSCursor.resizeLeftRight.push() : NSCursor.pop() }
+            .help("Drag to move the playhead")
+    }
+
+    /// Click / drag anywhere on the ruler (or drag the knob) to move the playhead;
+    /// while dragging the preview scrubs, and on release it plays from that point.
+    private var scrubGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.timelineSpace))
+            .onChanged { v in seekSequence(toX: v.location.x, play: false) }
+            .onEnded { v in seekSequence(toX: v.location.x, play: true) }
+    }
+
+    /// Move the sequence playhead to timeline x (seconds = x / pxPerSec), building
+    /// the whole-sequence composition first if we're not already in sequence mode.
+    private func seekSequence(toX x: CGFloat, play: Bool) {
+        let apply: () -> Void = {
+            let dur = bigPlayer.currentItem?.duration.seconds
+            let maxSec = (dur?.isFinite == true ? dur! : Double(totalSeconds))
+            let clampedX = max(0, min(x, CGFloat(maxSec) * pxPerSec))
+            let t = Double(clampedX / pxPerSec)
+            playheadX = clampedX
+            bigPlayer.seek(to: CMTime(seconds: t, preferredTimescale: 600),
+                           toleranceBefore: .zero, toleranceAfter: .zero)
+            if play {
+                bigPlayer.play(); isSequencePlaying = true
+            } else {
+                bigPlayer.pause(); isSequencePlaying = false
+            }
+        }
+        if !playingSequence || builtSignature != timelineSignature {
+            if let bigEndObserver { bigPlayer.removeTimeObserver(bigEndObserver); self.bigEndObserver = nil }
+            Task { _ = await buildTimeline(); apply() }
+        } else {
+            apply()
+        }
+    }
 
     /// The sentence clip the preview/controls act on (nil while a blooper is selected).
     private var currentClip: LineScore? {
@@ -739,8 +1194,12 @@ private struct EditorView: View {
             do {
                 bedByClip[clip.id] = try await service.generateBacksound(for: clip)
                 if bedVolumeByClip[clip.id] == nil { bedVolumeByClip[clip.id] = Self.defaultBedVolume }
-                // If this clip is the one on screen, start its bed right away.
-                if selection == .sentence(clip.id) { startBed(for: clip) }
+                // Default placement: start under the clip, fill its whole length.
+                if bedDelayByClip[clip.id] == nil { bedDelayByClip[clip.id] = 0 }
+                if bedLenByClip[clip.id] == nil { bedLenByClip[clip.id] = clipSeconds(clip) }
+                // The playhead observer starts the bed as the sequence reaches its
+                // window; if paused right on it, nudge it so it's heard immediately.
+                if playingSequence { updateSequenceBed(bigPlayer.currentTime().seconds) }
             } catch {
                 bedError = error.localizedDescription
             }
@@ -748,24 +1207,10 @@ private struct EditorView: View {
     }
 
     /// Loop the clip's generated bed under the preview at its chosen volume.
-    private func startBed(for clip: LineScore) {
-        stopBed()
-        guard let b64 = bedByClip[clip.id]?.audioB64,
-              let data = Data(base64Encoded: b64) else { return }
-        do {
-            let p = try AVAudioPlayer(data: data)
-            p.numberOfLoops = -1               // loop the short bed to cover the clip
-            p.volume = Float(bedVolume(clip.id))
-            p.play()
-            bedPlayer = p
-        } catch {
-            bedError = "Couldn't play the music bed: \(error.localizedDescription)"
-        }
-    }
-
     private func stopBed() {
         bedPlayer?.stop()
         bedPlayer = nil
+        activeBedIndex = nil
     }
 
     /// Live-updating binding for a clip's bed volume slider.
@@ -808,6 +1253,11 @@ private struct EditorView: View {
         let startTime = CMTime(seconds: start, preferredTimescale: 600)
         let endTime = CMTime(seconds: end, preferredTimescale: 600)
         bigPlayer.pause()
+        // Stop exactly at the span end. `forwardPlaybackEndTime` makes the player
+        // itself end playback (and pause) at `endTime` — a boundary observer alone
+        // can miss the crossing and let the raw recording play past the clip.
+        item.forwardPlaybackEndTime = endTime
+        bigPlayer.actionAtItemEnd = .pause
         item.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
             bigPlayer.play()
         }
@@ -816,23 +1266,56 @@ private struct EditorView: View {
         ) { [weak bigPlayer] in bigPlayer?.pause() }
     }
 
-    /// Select a transcript line and play its recorded span from the source video.
-    /// Falls back to a text placeholder for pasted lines that have no timecodes.
-    private func selectSentence(_ clip: LineScore) {
-        selection = .sentence(clip.id)
-        if let s = clip.start, let e = clip.end, e > s, sourceVideoURL != nil {
-            load(sourceVideoURL)
-            playSpan(start: s, end: e)
-            startBed(for: clip)   // plays only if this clip has a generated bed
-        } else {
-            stopSpan()
+    /// Select a transcript line and play the sequence from that clip onward, so the
+    /// playhead sweeps the rest of the timeline (each clip + its backsong heard only
+    /// while under the playhead). Falls back to a placeholder for pasted lines.
+    /// Play / pause the whole timeline so the playhead sweeps left → right. Builds
+    /// the sequence composition first if needed, and restarts from the left if the
+    /// last playthrough reached the end.
+    private func togglePlaySequence() {
+        if isSequencePlaying {
+            bigPlayer.pause()
+            isSequencePlaying = false
+            return
+        }
+        // Drop any single-span boundary observer left over from a blooper preview.
+        if let bigEndObserver { bigPlayer.removeTimeObserver(bigEndObserver); self.bigEndObserver = nil }
+        Task {
+            if !playingSequence || builtSignature != timelineSignature { _ = await buildTimeline() }
+            // Restart from the left if we're parked at (or past) the end.
+            if let item = bigPlayer.currentItem {
+                let dur = item.duration.seconds
+                let now = bigPlayer.currentTime().seconds
+                if dur.isFinite, dur > 0, now >= dur - 0.1 {
+                    await bigPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                }
+            }
+            bigPlayer.play()
+            isSequencePlaying = true
         }
     }
 
-    /// Select a blooper clip and play its span in the big preview.
+    private func selectSentence(_ clip: LineScore) {
+        selection = .sentence(clip.id)
+        guard clip.start != nil, clip.end != nil, sourceVideoURL != nil else { stopSpan(); return }
+        // Drop any single-span boundary observer left over from a blooper.
+        if let bigEndObserver { bigPlayer.removeTimeObserver(bigEndObserver); self.bigEndObserver = nil }
+        Task {
+            if !playingSequence || builtSignature != timelineSignature { _ = await buildTimeline() }
+            let target = CMTime(seconds: clipSecOffset(clip), preferredTimescale: 600)
+            bigPlayer.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                bigPlayer.play()
+            }
+        }
+    }
+
+    /// Select a blooper clip and play just its span (bloopers aren't part of the
+    /// transcript sequence, so this leaves sequence mode).
     private func selectBlooper(_ span: BlooperSpan) {
         selection = .blooper(span.id)
-        load(blooperVideoURL)
+        playingSequence = false
+        stopBed()
+        load(blooperVideoURL)             // replaces the composition with the raw file
         guard bigPlayer.currentItem != nil else { return }
         playSpan(start: span.start, end: span.end)
     }
@@ -840,6 +1323,8 @@ private struct EditorView: View {
     private func stopSpan() {
         bigPlayer.pause()
         stopBed()
+        // Clear any span end limit so a later full/sequence playback isn't truncated.
+        bigPlayer.currentItem?.forwardPlaybackEndTime = .invalid
         if let bigEndObserver { bigPlayer.removeTimeObserver(bigEndObserver); self.bigEndObserver = nil }
     }
 
@@ -852,6 +1337,24 @@ private struct EditorView: View {
         if case let .blooper(id) = selection, !spans.contains(where: { $0.id == id }) {
             selection = clips.first.map { .sentence($0.id) }
             stopSpan()
+        }
+    }
+
+    /// Manually scan the recording for non-speech / dead-air spans (Silero VAD +
+    /// optional lip check) and drop them on the timeline. Triggered by the button
+    /// in the backsong bar — bloopers are no longer detected automatically.
+    private func detectBloopers() {
+        guard let url = sourceVideoURL ?? blooperVideoURL else { return }
+        isDetectingBloopers = true
+        blooperDetectError = nil
+        Task {
+            defer { isDetectingBloopers = false }
+            do {
+                let result = try await service.detectBloopers(videoPath: url.path, useLipCheck: true)
+                receiveBloopers(result.bloopers, url)
+            } catch {
+                blooperDetectError = error.localizedDescription
+            }
         }
     }
 
@@ -874,42 +1377,30 @@ private struct EditorView: View {
     }
 
     var body: some View {
-        if showMergePreview {
-            MergePreviewView(items: mergeItems, videoURL: sourceVideoURL ?? blooperVideoURL,
-                             segments: transcriptSegments, orientation: orientation,
-                             captionsOn: captionsOn, beds: bedByClip, bedVolumes: bedVolumeByClip,
-                             exportFolder: exportFolder,
-                             onBack: { showMergePreview = false })
-        } else {
-            editorBody
-        }
+        editorBody
     }
 
     private var editorBody: some View {
         VStack(spacing: 0) {
             topBar
             Divider()
-            previewArea
-                .padding(24)
-            backsoundBar
-            Spacer(minLength: 0)
+            editorMiddle
             Divider()
             strip
-            Divider()
-            // Detected spans flow up into the timeline above (same sequence).
-            // The panel auto-scans the first-page recording (no second video pick).
-            BlooperPanel(onBloopers: receiveBloopers, sourceVideoURL: sourceVideoURL)
         }
         .onAppear {
             if selection == nil, let f = clips.first { selection = .sentence(f.id) }
-            // Load the source recording and park on the first clip's start frame,
-            // so the preview shows real footage without auto-playing on entry.
-            load(sourceVideoURL)
-            if let s = clips.first?.start {
-                bigPlayer.seek(to: CMTime(seconds: s, preferredTimescale: 600))
+            // Build the whole-sequence composition and park on its first frame
+            // (paused) so the preview and playhead are ready without auto-playing.
+            Task {
+                if await buildTimeline() {
+                    _ = await bigPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                    playheadX = 0   // show the (grabbable) playhead at the start
+                }
             }
+            startPlayheadObserver()
         }
-        .onDisappear { stopSpan() }
+        .onDisappear { stopSpan(); stopPlayheadObserver() }
         .alert("Couldn’t export clips",
                isPresented: Binding(get: { exportError != nil },
                                     set: { if !$0 { exportError = nil } })) {
@@ -964,6 +1455,9 @@ private struct EditorView: View {
 
     /// Name of the coordinate space the clip drag reads its pointer x from.
     private static let clipStripSpace = "clipStrip"
+    /// Coordinate space spanning the whole timeline content — used to scrub the
+    /// playhead (ruler click/drag + the draggable knob read pointer x from here).
+    private static let timelineSpace = "timelineContent"
     /// Horizontal gap between timeline clips (matches the HStack spacing).
     private static let clipGap: CGFloat = 2
 
@@ -1045,6 +1539,48 @@ private struct EditorView: View {
             .onEnded { _ in draggingBlooperID = nil }
     }
 
+    // ── Backsound lane: move (drag) sets the start timestamp, trim cuts length ──
+
+    /// Drag a bed tile horizontally to change when its music starts on the timeline.
+    private func bedDrag(_ clip: LineScore) -> some Gesture {
+        DragGesture(minimumDistance: 4)
+            .onChanged { value in
+                if draggingBedID == nil { draggingBedID = clip.id }
+                guard draggingBedID == clip.id else { return }
+                bedDragDX = value.translation.width
+            }
+            .onEnded { value in
+                // Absolute start (clamped ≥ 0) → store as a delay relative to the clip.
+                let baseX = CGFloat(clipSecOffset(clip) + bedDelay(clip.id)) * pxPerSec
+                let startSec = max(0, Double((baseX + value.translation.width) / pxPerSec))
+                bedDelayByClip[clip.id] = startSec - clipSecOffset(clip)
+                draggingBedID = nil
+                bedDragDX = 0
+            }
+    }
+
+    /// Commit a right-edge trim (drag delta in pixels) to the bed's play length.
+    private func commitBedTrim(_ clip: LineScore, dw: CGFloat) {
+        let newLen = bedLen(clip) + Double(dw / pxPerSec)
+        bedLenByClip[clip.id] = min(bedMaxLen(clip), max(1.0, newLen))
+        trimmingBedID = nil
+        bedTrimDW = 0
+    }
+
+    /// Live width (pixels) of a bed tile while moving/trimming, clamped to limits.
+    private func bedTileWidth(_ clip: LineScore) -> CGFloat {
+        let dw = trimmingBedID == clip.id ? bedTrimDW : 0
+        let raw = CGFloat(bedLen(clip)) * pxPerSec + dw
+        let maxW = CGFloat(bedMaxLen(clip)) * pxPerSec
+        return min(maxW, max(BacksoundTimelineClip.minWidth, raw))
+    }
+
+    /// Left edge (pixels) of a bed tile in the lane while moving.
+    private func bedTileX(_ clip: LineScore) -> CGFloat {
+        let dx = draggingBedID == clip.id ? bedDragDX : 0
+        return max(0, CGFloat(clipSecOffset(clip) + bedDelay(clip.id)) * pxPerSec + dx)
+    }
+
     private var topBar: some View {
         HStack {
             Button { onBack() } label: { Label("Back", systemImage: "chevron.left") }
@@ -1056,22 +1592,48 @@ private struct EditorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+        }
+        .padding()
+    }
+
+    /// The control column to the right of the clip preview: output/export settings
+    /// on top, the Decorated Features (music + bloopers) below.
+    private var rightPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            outputControls
+            if currentClip != nil { decoratedFeaturesPanel }
+            playbackControls
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Play / pause the whole sequence — the playhead runs left → right across the
+    /// timeline. Sits under the Decorated Features section.
+    private var playbackControls: some View {
+        Button { togglePlaySequence() } label: {
+            Label(isSequencePlaying ? "Pause" : "Play sequence",
+                  systemImage: isSequencePlaying ? "pause.fill" : "play.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.pill)
+        .disabled(sourceVideoURL == nil)
+        .help("Play the whole timeline — the playhead sweeps left to right")
+    }
+
+    /// Export destination, captions, orientation, and the Export action — moved
+    /// out of the top bar to sit beside the preview.
+    private var outputControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Output").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             folderPicker
             Toggle(isOn: $captionsOn) { Label("Captions", systemImage: "captions.bubble") }
                 .toggleStyle(.button)
                 .help("Burn word-by-word karaoke captions into the export (needs ffmpeg libass), and preview them live")
             orientationPicker
-            if isExporting {
-                ProgressView().controlSize(.small)
-            }
-            Button { exportClips() } label: {
-                Label("Export \(exportableClips.count) clip\(exportableClips.count == 1 ? "" : "s")",
-                      systemImage: "square.and.arrow.down")
-            }
-            .disabled(isExporting || sourceVideoURL == nil || exportableClips.isEmpty)
-            .help(exportHelp)
         }
-        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .glassPanel(cornerRadius: ViReel.rControl, shadowRadius: 10)
     }
 
     /// Human-readable name of the current export destination.
@@ -1161,9 +1723,34 @@ private struct EditorView: View {
         }
     }
 
-    @ViewBuilder
-    private var previewArea: some View {
-        Group {
+    private let previewMinHeight: CGFloat = 220
+
+    /// The whole middle region: the resizable preview on the left, the control
+    /// column on the right. Uses the live geometry so the preview can grow to fill
+    /// the blank space (down to the timeline, right up to the control column).
+    private var editorMiddle: some View {
+        GeometryReader { geo in
+            let panelW: CGFloat = 300, gap: CGFloat = 24, pad: CGFloat = 24
+            let availW = max(160, geo.size.width - pad * 2 - panelW - gap * 2)
+            let availH = max(160, geo.size.height - pad * 2)
+            HStack(alignment: .top, spacing: 0) {
+                // Equal spacers on either side center the preview horizontally in
+                // the space left of the control column.
+                Spacer(minLength: gap)
+                previewArea(availW: availW, availH: availH)
+                Spacer(minLength: gap)
+                rightPanel.frame(width: panelW)
+            }
+            .padding(pad)
+        }
+    }
+
+    private func previewArea(availW: CGFloat, availH: CGFloat) -> some View {
+        let aspect: CGFloat = orientation == .portrait ? 9.0 / 16.0 : 16.0 / 9.0
+        // Largest height that fits both the available height and width for this aspect.
+        let maxH = max(previewMinHeight, min(availH, availW / aspect))
+        let h = min(max(previewHeight, previewMinHeight), maxH)
+        return Group {
             if let span = currentBlooper, blooperVideoURL != nil {
                 blooperPreview(span)
             } else if let clip = currentClip,
@@ -1173,21 +1760,34 @@ private struct EditorView: View {
                 sentencePreview
             }
         }
-        // Frame the preview to the chosen output shape so the orientation toggle is
-        // visible here: portrait shows the 9:16 canvas (real footage letterboxed —
-        // the blurred top/bottom fill is added by ffmpeg on export), landscape 16:9.
-        .aspectRatio(orientation == .portrait ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
-        .frame(maxWidth: .infinity, maxHeight: orientation == .portrait ? 480 : 340)
-        .overlay(alignment: .top) {
-            if orientation == .portrait {
-                Text("Portrait 9:16 · blurred fill")
-                    .font(.caption2).foregroundStyle(.white)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.black.opacity(0.55), in: Capsule())
-                    .padding(8)
-            }
-        }
+        // Frame to the output shape (portrait 9:16 / landscape 16:9) at the user's
+        // chosen height — drag the corner handle to resize up to the space available.
+        .frame(width: h * aspect, height: h)
+        .overlay(alignment: .bottomTrailing) { previewResizeHandle(maxH: maxH, aspect: aspect) }
         .animation(.easeInOut(duration: 0.2), value: orientation)
+    }
+
+    /// Corner grip to drag-resize the preview (width follows the aspect ratio).
+    private func previewResizeHandle(maxH: CGFloat, aspect: CGFloat) -> some View {
+        Image(systemName: "arrow.down.right.and.arrow.up.left")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(7)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+            .padding(8)
+            .contentShape(Circle())
+            .gesture(
+                DragGesture()
+                    .onChanged { v in
+                        // Corner drag: honor whichever of vertical / horizontal pull is larger.
+                        let delta = max(v.translation.height, v.translation.width / aspect)
+                        previewHeight = min(maxH, max(previewMinHeight, previewDragBase + delta))
+                    }
+                    .onEnded { _ in previewDragBase = previewHeight }
+            )
+            .onHover { $0 ? NSCursor.crosshair.push() : NSCursor.pop() }
+            .help("Drag to resize the preview")
     }
 
     /// A selected transcript line's real footage, cut to its recorded [start, end]
@@ -1205,25 +1805,12 @@ private struct EditorView: View {
             OrientationVideoCanvas(player: bigPlayer, portrait: orientation == .portrait)
 
             if captionsOn {
-                CaptionOverlay(player: bigPlayer, words: wordsFor(clip),
+                // In sequence mode the player holds the whole-timeline composition,
+                // so caption with the remapped words; otherwise this clip's words.
+                CaptionOverlay(player: bigPlayer,
+                               words: playingSequence ? compWords : wordsFor(clip),
                                vertical: orientation == .portrait)
             }
-
-            HStack(spacing: 8) {
-                Image(systemName: "text.quote")
-                Text("“\(clip.text)”").lineLimit(1)
-                Spacer()
-                if let s = clip.start, let e = clip.end {
-                    Text("\(timecode(s)) – \(timecode(e)) · \(String(format: "%.1fs", e - s))")
-                        .monospacedDigit()
-                }
-                Button { selectSentence(clip) } label: { Label("Replay", systemImage: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-            }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14).padding(.vertical, 8)
-            .background(.black.opacity(0.55))
         }
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
@@ -1284,66 +1871,87 @@ private struct EditorView: View {
         }
     }
 
-    /// Background-music controls for the selected clip — emotion-matched bed.
+    /// Decorated Features for the selected clip — emotion-matched music bed and
+    /// blooper detection. Laid out vertically for the control column beside the
+    /// preview.
     @ViewBuilder
-    private var backsoundBar: some View {
+    private var decoratedFeaturesPanel: some View {
         if let clip = currentClip {
             let bed = bedByClip[clip.id]
-            HStack(spacing: 12) {
-                Image(systemName: "music.note")
-                    .font(.title3)
-                    .foregroundStyle(bed == nil ? .secondary : Color.purple)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Background music").font(.callout.weight(.semibold))
-                    if let err = bedError {
-                        Text(err).font(.caption).foregroundStyle(.red).lineLimit(1)
-                    } else if let bed {
-                        Text("\(bed.emotion) · V \(bed.valence, specifier: "%.2f") · A \(bed.arousal, specifier: "%.2f")")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    } else {
-                        Text("Generate an emotion-matched music bed")
-                            .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "music.note")
+                        .font(.title3)
+                        .foregroundStyle(bed == nil ? .secondary : Color.purple)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Decorated Features").font(.callout.weight(.semibold))
+                        if let err = bedError {
+                            Text(err).font(.caption).foregroundStyle(.red).lineLimit(2)
+                        } else if let bed {
+                            Text("\(bed.emotion) · V \(bed.valence, specifier: "%.2f") · A \(bed.arousal, specifier: "%.2f")")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        } else {
+                            Text("Add a music bed, or detect dead-air bloopers")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
 
-                if bed != nil {
-                    HStack(spacing: 6) {
-                        Image(systemName: "speaker.wave.2.fill")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Slider(value: bedVolumeBinding(clip.id), in: 0...1)
-                            .frame(width: 120)
-                        Text("\(Int((bedVolume(clip.id) * 100).rounded()))%")
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                            .frame(width: 36, alignment: .trailing)
-                    }
-                    .help("How loud the music bed sits under the clip — applies to both the preview and the export")
-                }
-
-                Spacer()
-
+                // Music bed.
                 if bedGeneratingID == clip.id {
-                    ProgressView().controlSize(.small)
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Generating…").font(.caption).foregroundStyle(.secondary)
+                    }
                 } else {
                     Button { generateBacksound(for: clip) } label: {
                         Label(bed == nil ? "Generate music" : "Regenerate", systemImage: "wand.and.stars")
+                            .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                 }
 
                 if let bed {
+                    HStack(spacing: 6) {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Slider(value: bedVolumeBinding(clip.id), in: 0...1)
+                        Text("\(Int((bedVolume(clip.id) * 100).rounded()))%")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                    }
+                    .help("How loud the music bed sits under the clip — applies to both the preview and the export")
                     Button { playAudio(b64: bed.audioB64) { bedError = $0 } } label: {
-                        Label("Bed only", systemImage: "play.fill")
+                        Label("Bed only", systemImage: "play.fill").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .help("Audition just the music bed")
                 }
+
+                Divider()
+
+                // Blooper detection.
+                if isDetectingBloopers {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Detecting bloopers…").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button { detectBloopers() } label: {
+                        Label(bloopers.isEmpty ? "Detect bloopers" : "Re-detect bloopers",
+                              systemImage: "waveform.badge.exclamationmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(sourceVideoURL == nil && blooperVideoURL == nil)
+                    .help(blooperDetectError
+                          ?? "Scan the recording for dead-air / non-speech spans and drop them on the timeline")
+                }
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(Color(nsColor: .controlBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
-            .padding(.horizontal, 24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .glassPanel(cornerRadius: ViReel.rControl, shadowRadius: 10)
         }
     }
 
@@ -1379,14 +1987,16 @@ private struct EditorView: View {
                         .lineLimit(1).transition(.opacity)
                 }
                 Spacer()
-                if !marked.isEmpty {
-                    Button { showMergePreview = true } label: {
-                        Label("Merge \(marked.count) \(markedKindLabel)\(marked.count == 1 ? "" : "s")",
-                              systemImage: "rectangle.stack.badge.play")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                if isExporting { ProgressView().controlSize(.small) }
+                Button { mergeAndExport() } label: {
+                    Label(marked.isEmpty
+                          ? "Merge"
+                          : "Merge \(marked.count) \(markedKindLabel)\(marked.count == 1 ? "" : "s")",
+                          systemImage: "rectangle.stack.badge.play")
                 }
+                .buttonStyle(.pill)
+                .disabled(marked.isEmpty || isExporting || (sourceVideoURL == nil && blooperVideoURL == nil))
+                .help("Merge the marked clips into one captioned 9:16 Short and reveal it in Finder")
                 selectedControls
             }
             .padding(.horizontal, 20).padding(.top, 12)
@@ -1394,6 +2004,10 @@ private struct EditorView: View {
             ScrollView(.horizontal, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 6) {
                     TimelineRuler(width: contentWidth, totalSeconds: timelineSeconds, pxPerSec: pxPerSec)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .gesture(scrubGesture)
+                        .help("Click or drag to move the playhead and play from there")
                     // Transcript lane — the sentence clips.
                     LaneLabel(text: "Transcript")
                     HStack(spacing: EditorView.clipGap) {
@@ -1448,31 +2062,46 @@ private struct EditorView: View {
                         .coordinateSpace(name: EditorView.bloopStripSpace)
                         .animation(.easeInOut(duration: 0.18), value: bloopers.map(\.id))
                     }
-                    // Backsound lane — generated music beds, each tile aligned
-                    // under the clip it belongs to (blank gap where a clip has none).
+                    // Backsound lane — generated music beds float freely on the
+                    // timeline: drag a tile to set when its music starts, and drag
+                    // its right edge to cut how long it plays.
                     if !bedByClip.isEmpty {
                         LaneLabel(text: "Backsound")
-                        HStack(spacing: EditorView.clipGap) {
+                        ZStack(alignment: .topLeading) {
+                            Color.clear
+                                .frame(width: max(contentWidth, CGFloat(timelineSeconds) * pxPerSec),
+                                       height: 46)
                             ForEach(clips) { clip in
                                 if let bed = bedByClip[clip.id] {
                                     BacksoundTimelineClip(
                                         bed: bed,
                                         volume: bedVolume(clip.id),
-                                        width: clipWidth(clip),
+                                        width: bedTileWidth(clip),
                                         isCurrent: selection == .sentence(clip.id),
+                                        isDragging: draggingBedID == clip.id || trimmingBedID == clip.id,
                                         onSelect: { selectSentence(clip) },
                                         onRemove: {
                                             bedByClip[clip.id] = nil
                                             bedVolumeByClip[clip.id] = nil
+                                            bedDelayByClip[clip.id] = nil
+                                            bedLenByClip[clip.id] = nil
                                             if selection == .sentence(clip.id) { stopBed() }
-                                        })
-                                } else {
-                                    Color.clear.frame(width: clipWidth(clip), height: 44)
+                                        },
+                                        onTrimChanged: { dw in trimmingBedID = clip.id; bedTrimDW = dw },
+                                        onTrimEnded: { dw in commitBedTrim(clip, dw: dw) })
+                                        .offset(x: bedTileX(clip))
+                                        .zIndex(draggingBedID == clip.id || trimmingBedID == clip.id ? 1 : 0)
+                                        .gesture(bedDrag(clip))
                                 }
                             }
                         }
+                        .frame(height: 46, alignment: .topLeading)
                     }
                 }
+                .overlay(alignment: .topLeading) {
+                    if let x = playheadX { playheadBar(x) }
+                }
+                .coordinateSpace(name: EditorView.timelineSpace)
                 .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
@@ -1555,19 +2184,27 @@ private struct TimelineClip: View {
 /// A generated music bed shown as a tile in the Backsound lane, sized to match
 /// the clip it scores and showing its mood + volume. Tapping selects the clip.
 private struct BacksoundTimelineClip: View {
+    static let minWidth: CGFloat = 34
+
     let bed: BacksoundResponse
     let volume: Double
     let width: CGFloat
     let isCurrent: Bool
+    let isDragging: Bool
     let onSelect: () -> Void
     let onRemove: () -> Void
+    let onTrimChanged: (CGFloat) -> Void
+    let onTrimEnded: (CGFloat) -> Void
+
+    /// Seconds represented by the current tile width (so the label shows the cut).
+    private var shownSeconds: Double { Double(width / 26) }
 
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: "music.note").font(.system(size: 11, weight: .bold))
             VStack(alignment: .leading, spacing: 1) {
                 Text(bed.emotion).font(.system(size: 9, weight: .semibold)).lineLimit(1)
-                Text("\(Int((volume * 100).rounded()))% · \(String(format: "%.0fs", bed.durationS))")
+                Text("\(Int((volume * 100).rounded()))% · \(String(format: "%.1fs", shownSeconds))")
                     .font(.system(size: 8)).opacity(0.85).lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -1575,10 +2212,11 @@ private struct BacksoundTimelineClip: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 6)
         .frame(width: width, height: 44, alignment: .leading)
-        .background(Color.purple.opacity(0.85), in: RoundedRectangle(cornerRadius: 6))
+        .background(Color.purple.opacity(isDragging ? 0.95 : 0.85), in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6)
-            .stroke(isCurrent ? Color.white : Color.white.opacity(0.15),
-                    lineWidth: isCurrent ? 2 : 1))
+            .stroke(isCurrent || isDragging ? Color.white : Color.white.opacity(0.15),
+                    lineWidth: isCurrent || isDragging ? 2 : 1))
+        .shadow(color: .black.opacity(isDragging ? 0.4 : 0), radius: 6, y: 3)
         .overlay(alignment: .topTrailing) {
             Button { onRemove() } label: {
                 Image(systemName: "xmark.circle.fill")
@@ -1587,9 +2225,28 @@ private struct BacksoundTimelineClip: View {
             .buttonStyle(.plain).padding(2)
             .help("Remove this music bed")
         }
+        .overlay(alignment: .trailing) { trimHandle }
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
-        .help("\(bed.emotion) bed · \(Int((volume * 100).rounded()))% — tap to select this clip")
+        .help("\(bed.emotion) bed · \(Int((volume * 100).rounded()))% — drag to move, drag the right edge to trim")
+    }
+
+    /// A right-edge grip that trims the bed's play length as it is dragged.
+    private var trimHandle: some View {
+        ZStack {
+            Color.white.opacity(0.001)                 // wide, invisible hit area
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(.white.opacity(0.85))
+                .frame(width: 3, height: 20)
+        }
+        .frame(width: 14, height: 44)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .local)
+                .onChanged { onTrimChanged($0.translation.width) }
+                .onEnded { onTrimEnded($0.translation.width) }
+        )
+        .help("Drag to trim how long the music plays")
     }
 }
 
@@ -1760,344 +2417,6 @@ private enum MergeClip: Identifiable {
     }
 }
 
-/// One clip's background-music window on the merged composition timeline.
-private struct BedSegment {
-    let start: Double
-    let end: Double
-    let b64: String
-    let volume: Float
-}
-
-/// "Next page" after picking clips to merge: concatenates the marked clips
-/// (transcript lines + blooper spans) into one composition, plays it, and can
-/// export the result to an .mp4 file.
-private struct MergePreviewView: View {
-    let items: [MergeClip]
-    let videoURL: URL?                            // source recording the spans are cut from
-    let segments: [TranscriptSegment]            // word times → karaoke captions
-    let orientation: ShortOrientation            // landscape (as-is) or portrait (blur fill)
-    let captionsOn: Bool                         // burn + preview karaoke captions
-    let beds: [Int: BacksoundResponse]           // per-sentence-clip music bed
-    let bedVolumes: [Int: Double]                // per-clip bed volume (0–1)
-    let exportFolder: String                     // user-chosen destination ("" = default)
-    let onBack: () -> Void
-
-    @State private var player = AVPlayer()
-    @State private var hasVideo = false
-    @State private var captionWords: [TranscriptWord] = []   // remapped to composition time
-    /// Per-clip bed windows on the composition timeline, played by a synced
-    /// AVAudioPlayer (avoids AVComposition's deprecated synchronous track APIs).
-    @State private var bedSchedule: [BedSegment] = []
-    @State private var bedPlayer: AVAudioPlayer?
-    @State private var activeBedIndex: Int?
-    @State private var bedObserver: Any?
-    @State private var buildError: String?
-    @State private var isExporting = false
-    @State private var exportError: String?
-    @State private var exportNotice: String?
-    private let service = HighlightService()
-
-    private var totalSeconds: Int { Int(items.reduce(0.0) { $0 + $1.seconds }.rounded()) }
-    /// Selected lines with no timecodes — they can't be composited into the video.
-    private var textOnlyCount: Int {
-        items.filter { if case .sentence(let c) = $0 { return c.start == nil || c.end == nil }; return false }.count
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            Divider()
-            preview.padding(24)
-            Spacer(minLength: 0)
-            Divider()
-            storyboard
-        }
-        .task { await build() }
-        .onDisappear {
-            player.pause()
-            stopBedSync()
-        }
-        .alert("Couldn’t export the video",
-               isPresented: Binding(get: { exportError != nil },
-                                    set: { if !$0 { exportError = nil } })) {
-            Button("OK", role: .cancel) { exportError = nil }
-        } message: {
-            Text(exportError ?? "")
-        }
-        .alert("Short exported",
-               isPresented: Binding(get: { exportNotice != nil },
-                                    set: { if !$0 { exportNotice = nil } })) {
-            Button("OK", role: .cancel) { exportNotice = nil }
-        } message: {
-            Text(exportNotice ?? "")
-        }
-    }
-
-    private var topBar: some View {
-        HStack {
-            Button { onBack() } label: { Label("Back", systemImage: "chevron.left") }
-                .buttonStyle(.borderless)
-            Spacer()
-            VStack(spacing: 1) {
-                Text("Merged preview").font(.headline)
-                Text("\(items.count) clip\(items.count == 1 ? "" : "s") · total ≈ \(totalSeconds)s")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if isExporting { ProgressView().controlSize(.small) }
-            Button { exportMerged() } label: { Label("Export Short", systemImage: "square.and.arrow.up") }
-                .disabled(!hasVideo || isExporting || videoURL == nil)
-                .help("Render the merged clips as a captioned Short. " + orientation.exportHelp)
-        }
-        .padding()
-    }
-
-    @ViewBuilder
-    private var preview: some View {
-        if hasVideo {
-            OrientationVideoCanvas(player: player, portrait: orientation == .portrait)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                // Match the export shape: portrait 9:16 (live blurred fill) vs
-                // landscape 16:9, so the orientation toggle is visible.
-                .aspectRatio(orientation == .portrait ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: orientation == .portrait ? 480 : 340)
-                .animation(.easeInOut(duration: 0.2), value: orientation)
-                .overlay {
-                    if captionsOn && !captionWords.isEmpty {
-                        CaptionOverlay(player: player, words: captionWords,
-                                       vertical: orientation == .portrait)
-                    }
-                }
-                .overlay(alignment: .bottomLeading) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if orientation == .portrait {
-                            Text("Portrait 9:16 · blurred fill")
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(.black.opacity(0.55), in: Capsule())
-                        }
-                        if textOnlyCount > 0 {
-                            Text("\(textOnlyCount) line\(textOnlyCount == 1 ? "" : "s") without timecodes not shown")
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(.black.opacity(0.55), in: Capsule())
-                        }
-                    }
-                    .font(.caption2).foregroundStyle(.white)
-                    .padding(10)
-                }
-        } else {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor))
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6]))
-                    .foregroundStyle(.quaternary)
-                VStack(spacing: 10) {
-                    Image(systemName: "rectangle.stack.badge.play")
-                        .font(.system(size: 46)).foregroundStyle(.secondary)
-                    Text(buildError ?? "Nothing to play — the merged clips are text-only (no footage yet).")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center).frame(maxWidth: 460)
-                }
-                .padding(32)
-            }
-            .frame(maxWidth: .infinity, minHeight: 320)
-        }
-    }
-
-    private var storyboard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Sequence").font(.callout.weight(.semibold)).foregroundStyle(.white)
-                .padding(.horizontal, 20).padding(.top, 12)
-            ScrollView(.horizontal, showsIndicators: true) {
-                HStack(spacing: 8) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
-                        MergeCard(index: idx + 1, item: item)
-                    }
-                }
-                .padding(.horizontal, 20).padding(.bottom, 16)
-            }
-        }
-        .background(Color(white: 0.12))
-    }
-
-    /// Concatenate the marked clips (transcript lines + blooper spans, video+audio)
-    /// into one composition, in the order they were arranged. Source tracks are
-    /// loaded async and inserted per composition track (the non-deprecated path).
-    private func build() async {
-        guard let videoURL else { return }
-        let asset = AVURLAsset(url: videoURL)
-        let comp = AVMutableComposition()
-        let allWords = segments.flatMap { $0.words ?? [] }
-        var cursor = CMTime.zero
-        var caps: [TranscriptWord] = []
-        var schedule: [BedSegment] = []
-        do {
-            let srcVideo = try await asset.loadTracks(withMediaType: .video).first
-            let srcAudio = try await asset.loadTracks(withMediaType: .audio).first
-            let compVideo = comp.addMutableTrack(withMediaType: .video,
-                                                 preferredTrackID: kCMPersistentTrackID_Invalid)
-            let compAudio = comp.addMutableTrack(withMediaType: .audio,
-                                                 preferredTrackID: kCMPersistentTrackID_Invalid)
-            for item in items {
-                guard let range = item.sourceRange else { continue }
-                let offset = cursor.seconds
-                // Remap this sentence's words from the source timeline onto the
-                // composition timeline (each item is appended at `cursor`).
-                if case .sentence(let c) = item, let s = c.start, let e = c.end {
-                    for w in allWords where w.start < e && w.end > s {
-                        caps.append(TranscriptWord(word: w.word,
-                                                   start: offset + (w.start - s),
-                                                   end: offset + (w.end - s)))
-                    }
-                    // Record this clip's bed window on the composition timeline;
-                    // a synced AVAudioPlayer plays it during that window.
-                    if let bed = beds[c.id] {
-                        schedule.append(BedSegment(start: offset, end: offset + range.duration.seconds,
-                                                   b64: bed.audioB64,
-                                                   volume: Float(bedVolumes[c.id] ?? 0.35)))
-                    }
-                }
-                if let srcVideo { try compVideo?.insertTimeRange(range, of: srcVideo, at: cursor) }
-                if let srcAudio { try compAudio?.insertTimeRange(range, of: srcAudio, at: cursor) }
-                cursor = cursor + range.duration
-            }
-            if cursor > .zero {
-                captionWords = caps
-                bedSchedule = schedule
-                player.replaceCurrentItem(with: AVPlayerItem(asset: comp))
-                hasVideo = true
-                await player.seek(to: .zero)
-                player.play()
-                startBedSync()
-            }
-        } catch {
-            buildError = "Couldn't build the merge: \(error.localizedDescription)"
-        }
-    }
-
-    /// Drive the bed audio off the merge player's clock: whenever the playhead
-    /// enters a clip that has a bed, loop that bed under it at its chosen volume.
-    private func startBedSync() {
-        guard bedObserver == nil, !bedSchedule.isEmpty else { return }
-        bedObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
-        ) { time in updateBed(at: time.seconds) }
-    }
-
-    private func updateBed(at now: Double) {
-        guard let idx = bedSchedule.firstIndex(where: { now >= $0.start && now < $0.end }) else {
-            bedPlayer?.stop(); bedPlayer = nil; activeBedIndex = nil
-            return
-        }
-        if activeBedIndex != idx {
-            bedPlayer?.stop()
-            let seg = bedSchedule[idx]
-            if let data = Data(base64Encoded: seg.b64), let p = try? AVAudioPlayer(data: data) {
-                p.numberOfLoops = -1
-                p.volume = seg.volume
-                p.currentTime = (now - seg.start).truncatingRemainder(dividingBy: max(p.duration, 0.01))
-                p.play()
-                bedPlayer = p
-            }
-            activeBedIndex = idx
-        } else if player.timeControlStatus != .playing {
-            bedPlayer?.pause()
-        } else if bedPlayer?.isPlaying == false {
-            bedPlayer?.play()
-        }
-    }
-
-    private func stopBedSync() {
-        if let bedObserver { player.removeTimeObserver(bedObserver); self.bedObserver = nil }
-        bedPlayer?.stop(); bedPlayer = nil; activeBedIndex = nil
-    }
-
-    /// Render the merged clips into one portrait (1080×1920) captioned Short via
-    /// the backend, then reveal the written file in Finder.
-    private func exportMerged() {
-        guard let videoURL else { return }
-        // Carry each sentence clip's generated bed into its span so the merged
-        // Short is mixed with the same music (at the chosen volume) as the preview.
-        let spans: [ClipSpan] = items.compactMap { item in
-            guard let span = item.clipSpan else { return nil }
-            if case .sentence(let c) = item, let bed = beds[c.id] {
-                return ClipSpan(start: span.start, end: span.end, text: span.text,
-                                musicB64: bed.audioB64,
-                                musicVolume: bedVolumes[c.id] ?? 0.35)
-            }
-            return span
-        }
-        guard !spans.isEmpty else {
-            exportError = "None of the selected clips have timecodes to cut."
-            return
-        }
-        isExporting = true
-        exportError = nil
-        exportNotice = nil
-        Task {
-            defer { isExporting = false }
-            do {
-                let result = try await service.mergeClips(
-                    videoPath: videoURL.path, clips: spans, segments: segments,
-                    vertical: orientation.vertical, subtitles: captionsOn,
-                    outputDir: exportFolder.isEmpty ? nil : exportFolder)
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.path)])
-                if result.subtitlesRequested && !result.subtitlesApplied {
-                    exportNotice = "Exported the \(orientation.rawValue.lowercased()) Short, but karaoke "
-                        + "captions were skipped — this ffmpeg has no subtitles support "
-                        + "(install an ffmpeg built with libass)."
-                }
-            } catch {
-                exportError = error.localizedDescription
-            }
-        }
-    }
-}
-
-/// One card in the merged-sequence storyboard.
-private struct MergeCard: View {
-    let index: Int
-    let item: MergeClip
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack {
-                Rectangle().fill(color.opacity(0.3))
-                Image(systemName: icon).font(.system(size: 16)).foregroundStyle(.white.opacity(0.7))
-            }
-            .frame(height: 50)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("#\(index) · \(title)").font(.system(size: 9, weight: .semibold))
-                Text(subtitle).font(.system(size: 8)).opacity(0.85)
-            }
-            .foregroundStyle(.white).lineLimit(2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 6).padding(.vertical, 4)
-            .background(color)
-        }
-        .frame(width: 130, height: 92)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
-
-    private var color: Color {
-        if case .blooper = item { return .red.opacity(0.7) } else { return .orange.opacity(0.92) }
-    }
-    private var icon: String {
-        if case .blooper = item { return "waveform.badge.exclamationmark" } else { return "text.alignleft" }
-    }
-    private var title: String {
-        if case .blooper = item { return "blooper" } else { return "clip" }
-    }
-    private var subtitle: String {
-        switch item {
-        case .sentence(let c):
-            if let s = c.start, let e = c.end, e > s {
-                return String(format: "%.1fs · %@", e - s, c.text)
-            }
-            return c.text
-        case .blooper(let b): return String(format: "%.2fs · %@", b.duration, b.label)
-        }
-    }
-}
 
 /// An `AVPlayerLayer`-backed video view. Because the layer is just a render
 /// surface, several instances can share one `AVPlayer` — which lets us stack a
@@ -2233,3 +2552,4 @@ private struct CaptionOverlay: View {
 #Preview {
     ContentView()
 }
+#endif

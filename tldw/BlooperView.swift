@@ -11,9 +11,11 @@
 //  a different video (drag-and-drop or browse) to override the source.
 //
 
+#if os(macOS)
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import tldwKit
 
 struct BlooperPanel: View {
     /// Reports the detected spans + their source video up to the editor.
@@ -39,13 +41,6 @@ struct BlooperPanel: View {
         .padding(.horizontal, 20).padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
-        .onAppear(perform: autoScanSource)
-    }
-
-    /// Scan the first-page recording automatically the first time the panel shows.
-    private func autoScanSource() {
-        guard videoURL == nil, let src = sourceVideoURL else { return }
-        load(src)
     }
 
     // MARK: - Header (title + video input)
@@ -183,3 +178,4 @@ struct BlooperPanel: View {
         }
     }
 }
+#endif
