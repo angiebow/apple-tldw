@@ -10,13 +10,13 @@ import Foundation
 /// Request body for `POST /highlight`. When `segments` (from `/transcribe`) are
 /// supplied, the backend ranks those timestamped lines so each result carries a
 /// start/end span — which the editor needs to cut clips.
-struct HighlightRequest: Codable {
-    let text: String
-    let topK: Int
+public struct HighlightRequest: Codable {
+    public let text: String
+    public let topK: Int
     /// User-supplied video title; folded into summarization to keep the summary
     /// (and the relevance ranking) anchored to the video's topic. nil when blank.
-    let title: String?
-    let segments: [TranscriptSegment]?
+    public let title: String?
+    public let segments: [TranscriptSegment]?
 
     enum CodingKeys: String, CodingKey {
         case text, title, segments
@@ -26,23 +26,23 @@ struct HighlightRequest: Codable {
 
 /// One transcript line with all of its pipeline scores. The same shape is used
 /// in both the "most relevant" and "most viral" lists.
-struct LineScore: Codable, Identifiable {
+public struct LineScore: Codable, Identifiable {
     /// Index of the line within the parsed transcript (stable id for lists).
-    let index: Int
-    let text: String
+    public let index: Int
+    public let text: String
     /// Cosine similarity of the line to the transcript summary (relevance).
-    let relevance: Double
+    public let relevance: Double
     /// Reranker regression output — continuous virality (0–1-ish).
-    let viralScore: Double
+    public let viralScore: Double
     /// Detector P(viral) and its binary verdict.
-    let viralProb: Double
-    let viralLabel: Bool
+    public let viralProb: Double
+    public let viralLabel: Bool
     /// Span of this line in the source video (seconds). Present only when the
     /// transcript came from `/transcribe` (timestamped); nil for pasted text.
-    let start: Double?
-    let end: Double?
+    public let start: Double?
+    public let end: Double?
 
-    var id: Int { index }
+    public var id: Int { index }
 
     enum CodingKeys: String, CodingKey {
         case index, text, relevance, start, end
@@ -53,9 +53,9 @@ struct LineScore: Codable, Identifiable {
 }
 
 /// Request body for `POST /backsound` — generate an emotion-matched music bed.
-struct BacksoundRequest: Codable {
-    let text: String
-    let durationS: Int?
+public struct BacksoundRequest: Codable {
+    public let text: String
+    public let durationS: Int?
 
     enum CodingKeys: String, CodingKey {
         case text
@@ -64,17 +64,17 @@ struct BacksoundRequest: Codable {
 }
 
 /// Response body for `POST /backsound`. `audioB64` is a base64-encoded WAV bed.
-struct BacksoundResponse: Codable {
+public struct BacksoundResponse: Codable {
     /// The MusicGen prompt derived from the detected mood.
-    let prompt: String
+    public let prompt: String
     /// Dominant emotion and its valence/arousal coordinates.
-    let emotion: String
-    let valence: Double
-    let arousal: Double
-    let audioB64: String
-    let sampleRate: Int
-    let durationS: Double
-    let model: String
+    public let emotion: String
+    public let valence: Double
+    public let arousal: Double
+    public let audioB64: String
+    public let sampleRate: Int
+    public let durationS: Double
+    public let model: String
 
     enum CodingKeys: String, CodingKey {
         case prompt, emotion, valence, arousal, model
@@ -86,10 +86,10 @@ struct BacksoundResponse: Codable {
 
 /// Request body for `POST /bloopers` — find non-speech spans in a local video.
 /// Any non-speech span counts as a blooper; there is no duration threshold.
-struct BlooperRequest: Codable {
+public struct BlooperRequest: Codable {
     /// Absolute path to the source video on this machine (app + backend share disk).
-    let videoPath: String
-    let useLipCheck: Bool
+    public let videoPath: String
+    public let useLipCheck: Bool
 
     enum CodingKeys: String, CodingKey {
         case videoPath = "video_path"
@@ -98,19 +98,19 @@ struct BlooperRequest: Codable {
 }
 
 /// One detected non-speech span: a candidate "blooper" (silence / pause / dead air).
-struct BlooperSpan: Codable, Identifiable {
+public struct BlooperSpan: Codable, Identifiable {
     /// Position of the span in the detected list (stable id).
-    let index: Int
+    public let index: Int
     /// Start / end of the span in the source video, in seconds.
-    let start: Double
-    let end: Double
-    let duration: Double
+    public let start: Double
+    public let end: Double
+    public let duration: Double
     /// Mean mouth motion over the span; nil when no face was found (`no_face`).
-    let lipMotion: Double?
+    public let lipMotion: Double?
     /// "silent" | "lips_moving" | "no_face" — the verdict from the lip check.
-    let label: String
+    public let label: String
 
-    var id: Int { index }
+    public var id: Int { index }
 
     enum CodingKeys: String, CodingKey {
         case index, start, end, duration, label
@@ -119,12 +119,12 @@ struct BlooperSpan: Codable, Identifiable {
 }
 
 /// Response body for `POST /bloopers`.
-struct BlooperResponse: Codable {
-    let source: String
+public struct BlooperResponse: Codable {
+    public let source: String
     /// Total duration of the source video, in seconds.
-    let durationS: Double
-    let count: Int
-    let bloopers: [BlooperSpan]
+    public let durationS: Double
+    public let count: Int
+    public let bloopers: [BlooperSpan]
 
     enum CodingKeys: String, CodingKey {
         case source, count, bloopers
@@ -133,11 +133,11 @@ struct BlooperResponse: Codable {
 }
 
 /// Request body for `POST /transcribe` — turn a local video/audio file into text.
-struct TranscribeRequest: Codable {
+public struct TranscribeRequest: Codable {
     /// Absolute path to the source file on this machine (app + backend share disk).
-    let videoPath: String
+    public let videoPath: String
     /// Whisper model size; nil lets the backend use its configured default.
-    let model: String?
+    public let model: String?
 
     enum CodingKeys: String, CodingKey {
         case videoPath = "video_path"
@@ -146,34 +146,40 @@ struct TranscribeRequest: Codable {
 }
 
 /// One word with its timestamp — drives the karaoke (word-by-word) subtitles.
-struct TranscriptWord: Codable {
-    let word: String
-    let start: Double
-    let end: Double
+public struct TranscriptWord: Codable {
+    public let word: String
+    public let start: Double
+    public let end: Double
+
+    public init(word: String, start: Double, end: Double) {
+        self.word = word
+        self.start = start
+        self.end = end
+    }
 }
 
 /// One transcribed span, timestamped on the source timeline.
-struct TranscriptSegment: Codable, Identifiable {
-    let id: Int
-    let start: Double
-    let end: Double
-    let text: String
+public struct TranscriptSegment: Codable, Identifiable {
+    public let id: Int
+    public let start: Double
+    public let end: Double
+    public let text: String
     /// Per-word timings (present when the backend has word timestamps on).
-    let words: [TranscriptWord]?
+    public let words: [TranscriptWord]?
 }
 
 /// Response body for `POST /transcribe`.
-struct TranscribeResponse: Codable {
-    let source: String
+public struct TranscribeResponse: Codable {
+    public let source: String
     /// Total duration of the source file, in seconds.
-    let durationS: Double
+    public let durationS: Double
     /// Fraction of the audio that contained speech.
-    let speechRatio: Double
+    public let speechRatio: Double
     /// The Whisper model that produced the transcript.
-    let model: String
+    public let model: String
     /// Full transcript (all segments joined) — this fills the highlighter input.
-    let text: String
-    let segments: [TranscriptSegment]
+    public let text: String
+    public let segments: [TranscriptSegment]
 
     enum CodingKeys: String, CodingKey {
         case source, model, text, segments
@@ -183,16 +189,16 @@ struct TranscribeResponse: Codable {
 }
 
 /// One span to cut, sent in `POST /clip`.
-struct ClipSpan: Codable {
-    let start: Double
-    let end: Double
-    let text: String
+public struct ClipSpan: Codable {
+    public let start: Double
+    public let end: Double
+    public let text: String
     /// Optional per-clip background music bed (base64 WAV) mixed under the speech
     /// at `musicVolume` (0–1). nil when the clip has no generated bed.
-    let musicB64: String?
-    let musicVolume: Double?
+    public let musicB64: String?
+    public let musicVolume: Double?
 
-    init(start: Double, end: Double, text: String,
+    public init(start: Double, end: Double, text: String,
          musicB64: String? = nil, musicVolume: Double? = nil) {
         self.start = start
         self.end = end
@@ -209,18 +215,18 @@ struct ClipSpan: Codable {
 }
 
 /// Request body for `POST /clip` — cut selected spans out of the source video.
-struct ClipRequest: Codable {
-    let videoPath: String
-    let clips: [ClipSpan]
+public struct ClipRequest: Codable {
+    public let videoPath: String
+    public let clips: [ClipSpan]
     /// Output subfolder name; nil lets the backend use the source file's stem.
-    let name: String?
+    public let name: String?
     /// User-chosen destination folder; nil falls back to the backend default.
-    let outputDir: String?
+    public let outputDir: String?
     /// Render 1080×1920 portrait Shorts, and burn karaoke captions (libass permitting).
-    let vertical: Bool
-    let subtitles: Bool
+    public let vertical: Bool
+    public let subtitles: Bool
     /// Full transcript segments (with per-word times) used to caption each clip.
-    let segments: [TranscriptSegment]?
+    public let segments: [TranscriptSegment]?
 
     enum CodingKeys: String, CodingKey {
         case clips, name, vertical, subtitles, segments
@@ -230,28 +236,28 @@ struct ClipRequest: Codable {
 }
 
 /// One cut clip in the `/clip` response.
-struct ClipInfo: Codable, Identifiable {
-    let index: Int
+public struct ClipInfo: Codable, Identifiable {
+    public let index: Int
     /// Absolute path to the written .mp4 on disk.
-    let path: String
-    let start: Double
-    let end: Double
-    let text: String
+    public let path: String
+    public let start: Double
+    public let end: Double
+    public let text: String
 
-    var id: Int { index }
+    public var id: Int { index }
 }
 
 /// Response body for `POST /clip`.
-struct ClipResponse: Codable {
-    let source: String
+public struct ClipResponse: Codable {
+    public let source: String
     /// Folder the clips were written into.
-    let outputDir: String
-    let count: Int
+    public let outputDir: String
+    public let count: Int
     /// Whether the clips were rendered portrait, and whether captions were burned.
-    let vertical: Bool
-    let subtitlesApplied: Bool
-    let subtitlesRequested: Bool
-    let clips: [ClipInfo]
+    public let vertical: Bool
+    public let subtitlesApplied: Bool
+    public let subtitlesRequested: Bool
+    public let clips: [ClipInfo]
 
     enum CodingKeys: String, CodingKey {
         case source, count, clips, vertical
@@ -264,29 +270,36 @@ struct ClipResponse: Codable {
 /// One background-music bed placed freely on the merged timeline: it starts at
 /// `start` seconds, plays for `duration` seconds (looping the WAV if shorter), at
 /// `volume` under the speech. Set by the editor's draggable/cuttable Backsound lane.
-struct MusicPlacement: Codable {
-    let b64: String
-    let start: Double
-    let duration: Double
-    let volume: Double
+public struct MusicPlacement: Codable {
+    public let b64: String
+    public let start: Double
+    public let duration: Double
+    public let volume: Double
+
+    public init(b64: String, start: Double, duration: Double, volume: Double) {
+        self.b64 = b64
+        self.start = start
+        self.duration = duration
+        self.volume = volume
+    }
 }
 
 /// Request body for `POST /merge` — concatenate selected spans into one Short.
-struct MergeRequest: Codable {
-    let videoPath: String
-    let clips: [ClipSpan]
+public struct MergeRequest: Codable {
+    public let videoPath: String
+    public let clips: [ClipSpan]
     /// Output file stem; nil lets the backend use `<source>_merged`.
-    let name: String?
+    public let name: String?
     /// User-chosen destination folder; nil falls back to the backend default.
-    let outputDir: String?
+    public let outputDir: String?
     /// Render 1080×1920 portrait, and burn karaoke captions (libass permitting).
-    let vertical: Bool
-    let subtitles: Bool
+    public let vertical: Bool
+    public let subtitles: Bool
     /// Music beds placed on the merged timeline (draggable/cuttable). When present,
     /// per-clip `ClipSpan.musicB64` is ignored and these are mixed over the merge.
-    let music: [MusicPlacement]?
+    public let music: [MusicPlacement]?
     /// Full transcript segments (with per-word times) used to caption the Short.
-    let segments: [TranscriptSegment]?
+    public let segments: [TranscriptSegment]?
 
     enum CodingKeys: String, CodingKey {
         case clips, name, vertical, subtitles, segments, music
@@ -296,16 +309,16 @@ struct MergeRequest: Codable {
 }
 
 /// Response body for `POST /merge` — one concatenated Short written to disk.
-struct MergeResponse: Codable {
-    let source: String
+public struct MergeResponse: Codable {
+    public let source: String
     /// Folder the merged Short was written into.
-    let outputDir: String
+    public let outputDir: String
     /// Absolute path to the written .mp4.
-    let path: String
-    let clipCount: Int
-    let vertical: Bool
-    let subtitlesApplied: Bool
-    let subtitlesRequested: Bool
+    public let path: String
+    public let clipCount: Int
+    public let vertical: Bool
+    public let subtitlesApplied: Bool
+    public let subtitlesRequested: Bool
 
     enum CodingKeys: String, CodingKey {
         case source, path, vertical
@@ -317,21 +330,21 @@ struct MergeResponse: Codable {
 }
 
 /// Which models produced the response (shown as provenance in the UI).
-struct ModelInfo: Codable {
-    let summarizer: String
-    let embedder: String
-    let detector: String
-    let reranker: String
+public struct ModelInfo: Codable {
+    public let summarizer: String
+    public let embedder: String
+    public let detector: String
+    public let reranker: String
 }
 
 /// Response body for `POST /highlight`.
-struct HighlightResponse: Codable {
-    let summary: String
-    let models: ModelInfo
-    let lineCount: Int
+public struct HighlightResponse: Codable {
+    public let summary: String
+    public let models: ModelInfo
+    public let lineCount: Int
     /// Top-K lines by relevance, and top-K by virality.
-    let relevant: [LineScore]
-    let viral: [LineScore]
+    public let relevant: [LineScore]
+    public let viral: [LineScore]
 
     enum CodingKeys: String, CodingKey {
         case summary, models

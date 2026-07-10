@@ -11,7 +11,11 @@ import SwiftUI
 struct tldwApp: App {
     var body: some Scene {
         WindowGroup("ViReel") {
+            #if os(macOS)
             ContentView()
+            #else
+            IOSRootView()
+            #endif
         }
     }
 }

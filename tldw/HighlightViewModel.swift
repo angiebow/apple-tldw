@@ -5,6 +5,7 @@
 
 import Foundation
 import Observation
+import tldwKit
 
 @Observable
 final class HighlightViewModel {

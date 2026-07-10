@@ -7,11 +7,11 @@
 
 import Foundation
 
-enum HighlightError: LocalizedError {
+public enum HighlightError: LocalizedError {
     case badStatus(Int, String)
     case transport(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .badStatus(let code, let detail):
             return "Server returned \(code): \(detail)"
@@ -21,11 +21,15 @@ enum HighlightError: LocalizedError {
     }
 }
 
-struct HighlightService {
-    var baseURL = URL(string: "http://127.0.0.1:8000")!
+public struct HighlightService {
+    public var baseURL: URL
+
+    public init(baseURL: URL = BackendConfig.baseURL) {
+        self.baseURL = baseURL
+    }
 
     /// Quick liveness probe for the status pill.
-    func health() async -> Bool {
+    public func health() async -> Bool {
         var request = URLRequest(url: baseURL.appendingPathComponent("health"))
         request.timeoutInterval = 3
         guard let (_, response) = try? await URLSession.shared.data(for: request),
@@ -37,7 +41,7 @@ struct HighlightService {
 
     /// Run the highlighter pipeline and return the two ranked lists. Pass the
     /// transcribe `segments` to get timestamped results (spans the editor can cut).
-    func highlight(_ text: String,
+    public func highlight(_ text: String,
                    title: String? = nil,
                    segments: [TranscriptSegment]? = nil,
                    topK: Int = 10) async throws -> HighlightResponse {
@@ -72,7 +76,7 @@ struct HighlightService {
     }
 
     /// Generate an emotion-matched background music bed for a clip (editor page).
-    func generateBacksound(for line: LineScore) async throws -> BacksoundResponse {
+    public func generateBacksound(for line: LineScore) async throws -> BacksoundResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("backsound"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -104,7 +108,7 @@ struct HighlightService {
     }
 
     /// Detect non-speech "blooper" spans in a local video file.
-    func detectBloopers(videoPath: String,
+    public func detectBloopers(videoPath: String,
                         useLipCheck: Bool = true) async throws -> BlooperResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("bloopers"))
         request.httpMethod = "POST"
@@ -137,7 +141,7 @@ struct HighlightService {
     }
 
     /// Transcribe a local video/audio file into text (preprocess + VAD-guided Whisper).
-    func transcribe(videoPath: String,
+    public func transcribe(videoPath: String,
                     model: String? = nil) async throws -> TranscribeResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("transcribe"))
         request.httpMethod = "POST"
@@ -172,7 +176,7 @@ struct HighlightService {
     /// Cut the given spans out of the source video into .mp4 files on disk.
     /// Defaults to portrait Shorts with karaoke captions; pass `segments` (with
     /// word times) so each clip can be captioned.
-    func exportClips(videoPath: String,
+    public func exportClips(videoPath: String,
                      clips: [ClipSpan],
                      segments: [TranscriptSegment]? = nil,
                      vertical: Bool = true,
@@ -212,7 +216,7 @@ struct HighlightService {
 
     /// Concatenate the given spans into one portrait+captioned Short on disk.
     /// Pass `segments` (with word times) so the merged Short can be captioned.
-    func mergeClips(videoPath: String,
+    public func mergeClips(videoPath: String,
                     clips: [ClipSpan],
                     segments: [TranscriptSegment]? = nil,
                     vertical: Bool = true,

@@ -7,12 +7,14 @@
 //   • results  — "Here are your Shorts": a card grid of the top-ranked lines
 //
 
+#if os(macOS)
 import SwiftUI
 import AppKit
 import AVFoundation
 import AVKit
 import Combine
 import UniformTypeIdentifiers
+import tldwKit
 
 /// One user-facing step on the loading screen. `group` maps to the ViewModel's
 /// `loadingStage` (0 = transcribe, 1 = rank) so the row can show done/running/next.
@@ -2550,3 +2552,4 @@ private struct CaptionOverlay: View {
 #Preview {
     ContentView()
 }
+#endif

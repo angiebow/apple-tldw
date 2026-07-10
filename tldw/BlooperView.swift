@@ -11,9 +11,11 @@
 //  a different video (drag-and-drop or browse) to override the source.
 //
 
+#if os(macOS)
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import tldwKit
 
 struct BlooperPanel: View {
     /// Reports the detected spans + their source video up to the editor.
@@ -176,3 +178,4 @@ struct BlooperPanel: View {
         }
     }
 }
+#endif

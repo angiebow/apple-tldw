@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FDEA006C30007A24004A7A94 /* tldwKit in Frameworks */ = {isa = PBXBuildFile; productRef = FDEA006B30007A24004A7A94 /* tldwKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		FD24D58D2FE91EE600CCEBBF /* tldw.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = tldw.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FDEA006C30007A24004A7A94 /* tldwKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = tldw;
 			packageProductDependencies = (
+				FDEA006B30007A24004A7A94 /* tldwKit */,
 			);
 			productName = tldw;
 			productReference = FD24D58D2FE91EE600CCEBBF /* tldw.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = FD24D5842FE91EE600CCEBBF;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FDEA006A30007A24004A7A94 /* XCLocalSwiftPackageReference "tldwKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FD24D58E2FE91EE600CCEBBF /* Products */;
 			projectDirPath = "";
@@ -271,11 +280,14 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -305,11 +317,14 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
@@ -335,6 +350,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		FDEA006A30007A24004A7A94 /* XCLocalSwiftPackageReference "tldwKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = tldwKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FDEA006B30007A24004A7A94 /* tldwKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = tldwKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = FD24D5852FE91EE600CCEBBF /* Project object */;
 }
