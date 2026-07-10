@@ -11,12 +11,17 @@ Do it in stages so each part is verifiable before moving on.
 
 ## Stage 0 — Create the VM (Oracle console; you)
 1. Sign up at cloud.oracle.com (needs a card for identity; Always-Free isn't charged).
-2. **Compute → Instances → Create instance**:
+2. **Upgrade the account to "Pay As You Go"** (Billing → Upgrade). This is the key
+   step for an always-on backend: it stays **$0** as long as you only use
+   Always-Free-eligible resources, but it **disables idle reclamation** — Oracle
+   otherwise stops free VMs that sit under ~20% CPU/net/mem over 7 days, which a
+   spiky backend like this would trigger. Without this, the VM can get powered off.
+3. **Compute → Instances → Create instance**:
    - Image: **Ubuntu 22.04**, Shape: **VM.Standard.A1.Flex**, 4 OCPU / 24 GB.
      (If you hit "out of capacity", try another Availability Domain or region.)
    - Add your SSH public key (`cat ~/.ssh/id_ed25519.pub`; make one with
      `ssh-keygen -t ed25519` if needed).
-3. **Networking → open ports 80 and 443**:
+4. **Networking → open ports 80 and 443**:
    - VCN → the subnet's **Security List** → add Ingress rules: source `0.0.0.0/0`,
      TCP ports **80** and **443**.
    - On the VM also: `sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT && sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT && sudo netfilter-persistent save` (Oracle Ubuntu ships restrictive iptables).
