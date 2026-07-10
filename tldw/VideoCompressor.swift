@@ -18,9 +18,12 @@ enum VideoCompressor {
     /// available for the asset.
     static func compress(_ input: URL) async throws -> URL {
         let asset = AVURLAsset(url: input)
-        let preset = AVAssetExportPreset1280x720
-        guard AVAssetExportSession.exportPresets(compatibleWith: asset).contains(preset),
-              let export = AVAssetExportSession(asset: asset, presetName: preset) else {
+        // 540p keeps uploads small + fast enough to clear the tunnel's ~100s /
+        // ~100MB limits. Fall back to 720p, then the original, if unavailable.
+        let compatible = AVAssetExportSession.exportPresets(compatibleWith: asset)
+        let preset = [AVAssetExportPreset960x540, AVAssetExportPreset1280x720]
+            .first(where: compatible.contains)
+        guard let preset, let export = AVAssetExportSession(asset: asset, presetName: preset) else {
             return input
         }
         let output = FileManager.default.temporaryDirectory
