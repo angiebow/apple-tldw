@@ -1,0 +1,221 @@
+openapi: 3.1.0
+info:
+  title: tldw / ViReel Cloud API
+  version: 0.1.0
+  description: >
+    Async, storage-backed API for the ViReel clients (iOS + macOS).
+
+    Media never travels as a local file path. The flow is:
+
+      1. POST /uploads                -> presigned PUT URL + media_key
+      2. PUT <upload_url> (media)     -> object storage
+      3. POST /jobs {type, media_key} -> { job_id }
+      4. GET  /jobs/{id}              -> { status, progress }  (poll)
+      5. GET  /jobs/{id}/result       -> presigned GET download URL(s)
+
+    Fast, text-only endpoints (/highlight, /backsound) stay synchronous — no job,
+    no media. Everything that touches video (transcribe, bloopers, clip, merge)
+    is an async job because it runs the heavy GPU/ffmpeg pipeline on a worker.
+
+servers:
+  - url: https://api.tldw.example
+    description: production (placeholder)
+  - url: http://127.0.0.1:8000
+    description: local dev
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /uploads:
+    post:
+      summary: Mint a presigned upload URL for a media object
+      description: >
+        Returns a short-lived URL the client PUTs the raw media bytes to, plus the
+        media_key to reference that object in a subsequent job. In dev the URL
+        points back at this server (/storage/{key}); in prod it is an S3/GCS/R2
+        presigned PUT.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename]
+              properties:
+                filename: { type: string, example: talk.mp4 }
+                content_type: { type: string, example: video/mp4 }
+                size_bytes: { type: integer, description: optional, for quota/limit checks }
+      responses:
+        "200":
+          description: Upload target minted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  media_key: { type: string, example: uploads/2026/07/ab12cd34.mp4 }
+                  upload_url: { type: string, example: "http://127.0.0.1:8000/storage/uploads/2026/07/ab12cd34.mp4" }
+                  method: { type: string, example: PUT }
+                  expires_in: { type: integer, example: 900 }
+
+  /jobs:
+    post:
+      summary: Enqueue an async media job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobCreate"
+      responses:
+        "202":
+          description: Job accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+
+  /jobs/{id}:
+    get:
+      summary: Poll job status and progress
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Current job state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404": { description: No such job }
+
+  /jobs/{id}/result:
+    get:
+      summary: Fetch the finished job's result payload + download URLs
+      description: >
+        Only valid when status == done. `outputs` lists each result object with a
+        presigned GET URL (in dev, a /storage/{key} URL). `data` carries any inline
+        JSON result (e.g. transcript text/segments) that isn't a media file.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Job result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobResult"
+        "404": { description: No such job }
+        "409": { description: Job not finished (status is queued/running/error) }
+
+  /highlight:
+    post:
+      summary: Rank transcript lines (synchronous, text-only)
+      description: Unchanged from the local API — no media, returns immediately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: "HighlightRequest (see server.py)" }
+      responses:
+        "200": { description: Relevant + viral ranked lists }
+
+  /backsound:
+    post:
+      summary: Generate an emotion-matched music bed (synchronous, text-only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: "BacksoundRequest (see server.py)" }
+      responses:
+        "200": { description: base64 WAV bed + emotion metadata }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Per-user API token. Metering/quota (monetization) hangs off this identity.
+
+  schemas:
+    JobType:
+      type: string
+      enum: [transcribe, bloopers, clip, merge]
+
+    JobStatus:
+      type: string
+      enum: [queued, running, done, error]
+
+    JobCreate:
+      type: object
+      required: [type, media_key]
+      properties:
+        type: { $ref: "#/components/schemas/JobType" }
+        media_key:
+          type: string
+          description: Object key returned by /uploads and already PUT to storage.
+          example: uploads/2026/07/ab12cd34.mp4
+        params:
+          type: object
+          description: >
+            Per-type parameters, mirroring the old request bodies minus video_path.
+            transcribe: { model? }
+            bloopers:   { use_lip_check? }
+            clip:       { clips[], name?, vertical?, subtitles?, srt?, segments? }
+            merge:      { clips[], name?, vertical?, subtitles?, music?, segments? }
+
+    Job:
+      type: object
+      properties:
+        id: { type: string, example: job_ab12cd34 }
+        type: { $ref: "#/components/schemas/JobType" }
+        status: { $ref: "#/components/schemas/JobStatus" }
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: 0..1 fraction; mirrors the backend progress UI stages.
+        stage:
+          type: string
+          nullable: true
+          description: Human-readable current stage, e.g. "transcribing", "cutting clip 2/5".
+        error: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    JobResult:
+      type: object
+      properties:
+        id: { type: string }
+        type: { $ref: "#/components/schemas/JobType" }
+        status: { $ref: "#/components/schemas/JobStatus" }
+        data:
+          type: object
+          nullable: true
+          description: Inline JSON result (transcript text/segments, blooper spans, etc.).
+        outputs:
+          type: array
+          description: Result media objects with presigned download URLs.
+          items:
+            type: object
+            properties:
+              key: { type: string, example: results/job_ab12cd34/clip_00.mp4 }
+              download_url: { type: string, example: "http://127.0.0.1:8000/storage/results/job_ab12cd34/clip_00.mp4" }
+              kind: { type: string, example: clip }
+              bytes: { type: integer }

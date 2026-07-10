@@ -12,7 +12,8 @@
 //
 
 #if os(macOS)
-import SwiftUI
+import
+SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import tldwKit

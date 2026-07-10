@@ -1,0 +1,32 @@
+# CPU-only requirements for the Hugging Face Docker Space (free tier).
+# Install with the CPU torch index:
+#   pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-cloud.txt
+
+# --- API / worker (always needed) ---
+fastapi
+uvicorn[standard]
+pydantic>=2
+python-multipart
+
+# --- shared numerics ---
+numpy
+
+# --- transcription (CPU port of mlx_whisper) ---
+faster-whisper
+
+# --- summarizer (CPU port of mlx_lm Llama-3.2-3B) ---
+llama-cpp-python
+huggingface_hub
+
+# --- torch stack: already CPU-capable (embedder, virality detector+reranker,
+#     MusicGen, emotion, Silero VAD). CPU wheels via the index-url above. ---
+torch
+torchaudio
+sentence-transformers
+transformers
+
+# --- blooper lip-motion check ---
+opencv-python-headless
+
+# --- audio IO ---
+soundfile

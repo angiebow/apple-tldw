@@ -47,6 +47,14 @@ MODELS_DIR = os.environ.get(
 # derived from it). Apple-Silicon-only (mlx_lm); overridable for other MLX repos.
 SUMMARIZER_NAME = os.environ.get("TLDW_SUMMARIZER",
                                  "mlx-community/Llama-3.2-3B-Instruct-4bit")
+# Summarizer backend: "mlx" (Apple Silicon dev) or "llamacpp" (CPU/Linux, e.g.
+# the Hugging Face Space). "auto" prefers MLX when importable, else llama.cpp.
+SUMMARIZER_BACKEND    = os.environ.get("TLDW_SUMMARIZER_BACKEND", "auto")
+# GGUF used by the llama.cpp backend (downloaded from HF on first summarize).
+SUMMARIZER_GGUF_REPO  = os.environ.get("TLDW_SUMMARIZER_GGUF_REPO",
+                                       "bartowski/Llama-3.2-3B-Instruct-GGUF")
+SUMMARIZER_GGUF_FILE  = os.environ.get("TLDW_SUMMARIZER_GGUF_FILE",
+                                       "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
 EMBEDDER_NAME   = "sentence-transformers/all-mpnet-base-v2"
 DETECTOR_DIR    = os.path.join(MODELS_DIR, "distilbert-detector")
 RERANKER_DIR    = os.path.join(MODELS_DIR, "bert-ranker")
@@ -95,14 +103,34 @@ CLIPS_OUT_DIR = os.environ.get(
 _models = {}
 
 
+def _resolve_summarizer_backend() -> str:
+    """auto -> mlx when importable (Apple dev), else llamacpp (CPU/Linux)."""
+    if SUMMARIZER_BACKEND != "auto":
+        return SUMMARIZER_BACKEND
+    try:
+        import mlx_lm  # noqa: F401
+        return "mlx"
+    except Exception:
+        return "llamacpp"
+
+
 def _load_models():
     if _models:
         return _models
     print(f"[tldw] loading models on {DEVICE} …")
-    # Llama summarizer via MLX (Apple Silicon). Imported here (not at module top)
-    # so the dependency is only required when models actually load.
-    from mlx_lm import load as _mlx_load  # noqa: E402  (intentionally deferred)
-    _models["summarizer"], _models["summarizer_tok"] = _mlx_load(SUMMARIZER_NAME)
+    # Llama summarizer. Backend chosen at load time; imports are deferred so only
+    # the selected backend's dependency is required.
+    backend = _resolve_summarizer_backend()
+    _models["summarizer_backend"] = backend
+    if backend == "mlx":
+        from mlx_lm import load as _mlx_load  # noqa: E402  (intentionally deferred)
+        _models["summarizer"], _models["summarizer_tok"] = _mlx_load(SUMMARIZER_NAME)
+    else:  # llamacpp (CPU/Linux, e.g. the HF Space)
+        from cloud.cpu_backends import LlamaCppTokenizer, load_llamacpp
+        llm = load_llamacpp(SUMMARIZER_GGUF_REPO, SUMMARIZER_GGUF_FILE)
+        _models["summarizer"] = llm
+        _models["summarizer_tok"] = LlamaCppTokenizer(llm)
+    print(f"[tldw] summarizer backend: {backend}")
     _models["embedder"] = SentenceTransformer(EMBEDDER_NAME, device=DEVICE)
 
     _models["detector_tok"] = AutoTokenizer.from_pretrained(DETECTOR_DIR)
@@ -156,7 +184,11 @@ def _sentence_chunks(text: str, tok, budget: int) -> list[str]:
 
 
 def _llama_generate(m, instruction: str, max_tokens: int) -> str:
-    """Run one instruction through the MLX Llama chat model and return the text."""
+    """Run one instruction through the summarizer chat model and return the text.
+    Dispatches on the backend chosen in _load_models."""
+    if m.get("summarizer_backend") == "llamacpp":
+        from cloud.cpu_backends import llamacpp_chat
+        return llamacpp_chat(m["summarizer"], instruction, max_tokens)
     from mlx_lm import generate  # noqa: E402  (deferred with the model load)
     model, tok = m["summarizer"], m["summarizer_tok"]
     messages = [{"role": "user", "content": instruction}]

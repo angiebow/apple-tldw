@@ -30,4 +30,15 @@ public enum BackendConfig {
         return URL(string: "https://api.tldw.example")!
         #endif
     }
+
+    /// Bearer token sent as `Authorization: Bearer <token>` to the cloud backend.
+    /// Resolved from the app's Info.plist `BackendAPIToken` (inject per-scheme via
+    /// a build setting / xcconfig). nil when unset — dev backends leave auth off.
+    public static var apiToken: String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "BackendAPIToken") as? String else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
