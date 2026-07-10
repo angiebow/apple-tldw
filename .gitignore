@@ -104,3 +104,6 @@ poc-subtitles/output/
 .env
 .env.*
 !.env.example
+
+# Local backend pointer (rotating tunnel URL + API token) — do not commit
+tldw/BackendConfig.plist

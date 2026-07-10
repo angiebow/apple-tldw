@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.requests import ClientDisconnect
 
 from . import config
 from .jobs import JOB_TYPES, JobStore
@@ -161,7 +162,15 @@ def backsound(payload: Dict[str, Any] = Body(...), _: None = Depends(require_aut
 @app.put("/storage/{key:path}")
 async def storage_put(key: str, request: Request,
                       _: None = Depends(require_auth)) -> Dict[str, Any]:
-    body = await request.body()
+    try:
+        body = await request.body()
+    except ClientDisconnect:
+        # Common when a large upload is cut off — e.g. Cloudflare free tunnels
+        # cap request bodies at ~100MB. Return a clear 4xx, not a 500 traceback.
+        raise HTTPException(
+            status_code=413,
+            detail="Upload interrupted — the file may be too large (the tunnel "
+                   "caps uploads near 100MB). Try a shorter video.")
     if config.MAX_UPLOAD_BYTES and len(body) > config.MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Upload exceeds size limit.")
     try:
