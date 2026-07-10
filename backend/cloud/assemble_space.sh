@@ -12,6 +12,10 @@ mkdir -p "$DEST"
 # Dockerfile + Space README at the Space root.
 cp "$ROOT/backend/cloud/Dockerfile"       "$DEST/Dockerfile"
 cp "$ROOT/backend/cloud/space_README.md"  "$DEST/README.md"
+# VM deploy bundle (compose + Caddy auto-HTTPS) — used by VM_DEPLOY.md, ignored
+# by HF Spaces (which just uses the Dockerfile).
+cp "$ROOT/backend/cloud/deploy/docker-compose.yml" "$DEST/docker-compose.yml"
+cp "$ROOT/backend/cloud/deploy/Caddyfile"          "$DEST/Caddyfile"
 
 # App code + the PoC modules the pipeline imports. Exclude local venvs, caches,
 # and the dev-only .data so the push stays lean.

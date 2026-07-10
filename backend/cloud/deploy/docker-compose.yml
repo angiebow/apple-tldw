@@ -1,0 +1,40 @@
+# ViReel backend on a VM: the app container + Caddy for automatic HTTPS.
+# Caddy fetches a Let's Encrypt cert for $DOMAIN and reverse-proxies to the app,
+# which satisfies the iOS App Transport Security (HTTPS-only) requirement.
+#
+# Runs from the assembled Space tree root (Dockerfile + backend/ + poc-*/ here).
+# Set DOMAIN and TLDW_API_TOKEN in a .env file next to this compose file.
+
+services:
+  backend:
+    build: .
+    environment:
+      - TLDW_API_TOKEN=${TLDW_API_TOKEN}
+      - TLDW_PUBLIC_BASE_URL=https://${DOMAIN}
+      - TLDW_STORAGE_BACKEND=local
+    # Persist the downloaded model weights so restarts don't re-download them.
+    # The host dir must be owned by uid 1000 (the container user): see VM_DEPLOY.md.
+    volumes:
+      - ./hf-cache:/home/user/.cache/huggingface
+    expose:
+      - "7860"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+volumes:
+  caddy-data:
+  caddy-config:
