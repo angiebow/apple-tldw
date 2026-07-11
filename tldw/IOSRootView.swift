@@ -38,8 +38,7 @@ struct IOSRootView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color(.systemBackground).ignoresSafeArea()
+            Group {
                 if model.isLoading {
                     LoadingView(model: model)
                 } else if model.hasResults {
@@ -51,6 +50,8 @@ struct IOSRootView: View {
                               isError: model.serverReachable == false)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemBackground))
             .navigationTitle(model.hasResults ? "Your Shorts" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -244,38 +245,37 @@ private struct ResultsView: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 12) {
-                    if !model.summary.isEmpty {
-                        Text(model.summary)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(Brand.card(scheme), in: RoundedRectangle(cornerRadius: 14))
-                    }
-                    sectionHeader("Most viral", "flame.fill", .orange)
-                    ForEach(model.viralLines) { card($0, viral: true) }
-                    if !model.relevantLines.isEmpty {
-                        sectionHeader("Most relevant", "scope", Brand.accent)
-                        ForEach(model.relevantLines) { card($0, viral: false) }
-                    }
+        ScrollView {
+            LazyVStack(spacing: 10) {
+                Text("Tap the Shorts you want, then export or merge.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                sectionHeader("Most viral", "flame.fill", .orange)
+                ForEach(model.viralLines) { card($0, viral: true) }
+                if !model.relevantLines.isEmpty {
+                    sectionHeader("Most relevant", "scope", Brand.accent)
+                    ForEach(model.relevantLines) { card($0, viral: false) }
                 }
-                .padding(16)
-                .padding(.bottom, 90)
             }
-            exportBar
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 12)
         }
+        // Keep dense content readable — don't let large accessibility text blow
+        // the cards up.
+        .dynamicTypeSize(...DynamicTypeSize.large)
+        .safeAreaInset(edge: .bottom) { exportBar }
     }
 
     private func sectionHeader(_ title: String, _ icon: String, _ color: Color) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: icon).foregroundStyle(color)
-            Text(title).font(.headline)
+            Image(systemName: icon).font(.caption).foregroundStyle(color)
+            Text(title).font(.subheadline.weight(.semibold))
             Spacer()
         }
-        .padding(.top, 6)
+        .padding(.top, 4)
     }
 
     private func card(_ line: LineScore, viral: Bool) -> some View {
@@ -283,14 +283,17 @@ private struct ResultsView: View {
         return Button {
             if isOn { selected.remove(line.index) } else { selected.insert(line.index) }
         } label: {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .font(.title2)
+                    .font(.body)
                     .foregroundStyle(isOn ? AnyShapeStyle(Brand.gradient) : AnyShapeStyle(Color.secondary.opacity(0.5)))
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(line.text).font(.callout).foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(line.text)
+                        .font(.footnote)
+                        .foregroundStyle(.primary)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 8) {
                         if let s = line.start, let e = line.end {
                             Label(timecode(s) + "–" + timecode(e), systemImage: "timer")
                                 .font(.caption2.monospaced())
@@ -301,48 +304,48 @@ private struct ResultsView: View {
                     }
                 }
             }
-            .padding(14)
-            .background(Brand.card(scheme), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(isOn ? AnyShapeStyle(Brand.gradient) : AnyShapeStyle(Color.clear), lineWidth: 2))
+            .padding(12)
+            .background(Brand.card(scheme), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(isOn ? AnyShapeStyle(Brand.gradient) : AnyShapeStyle(Color.clear), lineWidth: 1.5))
         }
         .buttonStyle(.plain)
     }
 
     private func scoreBar(_ score: Double, viral: Bool) -> some View {
-        let pct = max(0, min(1, viral ? score : score))
+        let pct = max(0, min(1, score))
         return HStack(spacing: 5) {
             Image(systemName: viral ? "flame.fill" : "target")
                 .font(.caption2).foregroundStyle(viral ? .orange : Brand.accent)
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.secondary.opacity(0.2)).frame(width: 44, height: 5)
+                Capsule().fill(Color.secondary.opacity(0.2)).frame(width: 40, height: 4)
                 Capsule().fill(viral ? AnyShapeStyle(Color.orange) : AnyShapeStyle(Brand.gradient))
-                    .frame(width: 44 * pct, height: 5)
+                    .frame(width: 40 * pct, height: 4)
             }
         }
     }
 
     private var exportBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Button(action: onClips) {
                 Label("Export \(selected.count)", systemImage: "square.and.arrow.up")
                     .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity).padding(.vertical, 14)
-                    .background(Brand.card(scheme), in: RoundedRectangle(cornerRadius: 14))
+                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+                    .background(Brand.card(scheme), in: RoundedRectangle(cornerRadius: 12))
             }
             Button(action: onMerge) {
                 Label("Merge", systemImage: "film.stack")
                     .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity).padding(.vertical, 14)
-                    .background(Brand.gradient, in: RoundedRectangle(cornerRadius: 14))
+                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+                    .background(Brand.gradient, in: RoundedRectangle(cornerRadius: 12))
                     .foregroundStyle(.white)
             }
         }
         .foregroundStyle(.primary)
         .disabled(selected.isEmpty)
         .opacity(selected.isEmpty ? 0.5 : 1)
-        .padding(16)
-        .background(.thinMaterial)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.bar)
     }
 
     private func timecode(_ seconds: Double) -> String {
