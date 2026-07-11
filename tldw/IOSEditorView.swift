@@ -53,7 +53,7 @@ struct IOSEditorView: View {
                 timeline
                 toolTabs
                 toolPanel
-                    .frame(maxHeight: .infinity, alignment: .top)
+                    .frame(minHeight: 128, alignment: .top)
                 bottomBar
             }
             if exporting || exportedURL != nil || exportError != nil { exportOverlay }
