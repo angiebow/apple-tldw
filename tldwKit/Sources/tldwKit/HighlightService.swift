@@ -63,9 +63,15 @@ public struct HighlightService {
 
     /// Generate an emotion-matched background music bed for a clip (editor page).
     public func generateBacksound(for line: LineScore) async throws -> BacksoundResponse {
+        try await generateBacksound(text: line.text)
+    }
+
+    /// Generate a background music bed from arbitrary text (e.g. the merged
+    /// timeline's transcript) — used by the iOS editor's Music tool.
+    public func generateBacksound(text: String) async throws -> BacksoundResponse {
         try await client.postJSON(
             "backsound",
-            BacksoundRequest(text: line.text, durationS: nil),
+            BacksoundRequest(text: text, durationS: nil),
             timeout: 600)  // first call downloads MusicGen weights
     }
 

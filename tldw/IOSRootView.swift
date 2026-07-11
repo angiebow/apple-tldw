@@ -35,6 +35,7 @@ struct IOSRootView: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var selected: Set<Int> = []
     @State private var showingExport = false
+    @State private var editorModel: IOSEditorModel?
 
     var body: some View {
         NavigationStack {
@@ -43,7 +44,7 @@ struct IOSRootView: View {
                     LoadingView(model: model)
                 } else if model.hasResults {
                     ResultsView(model: model, selected: $selected,
-                                onMerge: { startExport(merge: true) },
+                                onMerge: { openEditor() },
                                 onClips: { startExport(merge: false) })
                 } else {
                     StartView(pickerItem: $pickerItem, message: model.statusMessage,
@@ -70,6 +71,18 @@ struct IOSRootView: View {
         .sheet(isPresented: $showingExport) {
             ExportSheet(exporter: exporter)
         }
+        .fullScreenCover(item: $editorModel) { editor in
+            IOSEditorView(model: editor)
+        }
+    }
+
+    private func openEditor() {
+        let all = model.viralLines + model.relevantLines
+        var seen = Set<Int>()
+        let chosen = all.filter { selected.contains($0.index) && seen.insert($0.index).inserted }
+        guard let source = model.sourceVideoURL, !chosen.isEmpty else { return }
+        editorModel = IOSEditorModel(sourceURL: source, lines: chosen,
+                                     segments: model.transcriptSegments)
     }
 
     @MainActor
@@ -334,7 +347,7 @@ private struct ResultsView: View {
                     .background(Brand.card(scheme), in: RoundedRectangle(cornerRadius: 12))
             }
             Button(action: onMerge) {
-                Label("Merge", systemImage: "film.stack")
+                Label("Edit", systemImage: "slider.horizontal.3")
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity).padding(.vertical, 12)
                     .background(Brand.gradient, in: RoundedRectangle(cornerRadius: 12))
