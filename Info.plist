@@ -13,5 +13,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- Blank launch screen — REQUIRED for the app to render full-screen. Without
+	     it iOS letterboxes the app (black bars top/bottom). The auto-generated
+	     Info.plist supplied this; our custom file must too. -->
+	<key>UILaunchScreen</key>
+	<dict/>
 </dict>
 </plist>
