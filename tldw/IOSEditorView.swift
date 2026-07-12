@@ -28,11 +28,12 @@ struct IOSEditorView: View {
     @State private var exportError: String?
 
     private enum Tool: String, CaseIterable, Identifiable {
-        case order = "Order", captions = "Captions", music = "Music", trim = "Trim"
+        case order = "Order", format = "Format", captions = "Captions", music = "Music", trim = "Trim"
         var id: String { rawValue }
         var icon: String {
             switch self {
             case .order:    return "arrow.left.arrow.right"
+            case .format:   return "aspectratio"
             case .captions: return "captions.bubble"
             case .music:    return "music.note"
             case .trim:     return "timeline.selection"
@@ -86,8 +87,9 @@ struct IOSEditorView: View {
     private var preview: some View {
         ZStack {
             PlayerLayerView(player: model.player)
-                .aspectRatio(9.0 / 16.0, contentMode: .fit)
+                .aspectRatio(model.orientation.aspect, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
+                .animation(.easeInOut, value: model.orientation)
             Button {
                 if isPlaying { model.pause() } else { model.playSelected() }
                 isPlaying.toggle()
@@ -168,6 +170,7 @@ struct IOSEditorView: View {
         VStack(spacing: 14) {
             switch tool {
             case .order:    orderPanel
+            case .format:   formatPanel
             case .captions: togglePanel(
                 title: "Burn captions", subtitle: "Karaoke subtitles on the Short",
                 isOn: Binding(get: { model.captions }, set: { model.captions = $0 }))
@@ -194,6 +197,30 @@ struct IOSEditorView: View {
                 Text("No clips left — go back and pick some Shorts.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var formatPanel: some View {
+        HStack(spacing: 16) {
+            ForEach(ClipOrientation.allCases) { o in
+                let isSel = model.orientation == o
+                Button { model.orientation = o } label: {
+                    VStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 5)
+                            .strokeBorder(isSel ? AnyShapeStyle(g) : AnyShapeStyle(Color.white.opacity(0.35)),
+                                          lineWidth: 2)
+                            .aspectRatio(o.aspect, contentMode: .fit)
+                            .frame(height: 48)
+                            .overlay(Image(systemName: o.icon).font(.caption)
+                                .foregroundStyle(isSel ? .white : .white.opacity(0.5)))
+                        Text("\(o.rawValue) · \(o.ratioLabel)")
+                            .font(.caption)
+                            .foregroundStyle(isSel ? .white : .white.opacity(0.6))
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
         }
     }
 

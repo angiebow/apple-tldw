@@ -23,6 +23,15 @@ struct EditClip: Identifiable, Equatable {
     var duration: Double { max(0.1, end - start) }
 }
 
+enum ClipOrientation: String, CaseIterable, Identifiable {
+    case portrait = "Portrait", landscape = "Landscape"
+    var id: String { rawValue }
+    /// Preview aspect ratio (width / height).
+    var aspect: CGFloat { self == .portrait ? 9.0 / 16.0 : 16.0 / 9.0 }
+    var ratioLabel: String { self == .portrait ? "9:16" : "16:9" }
+    var icon: String { self == .portrait ? "rectangle.portrait" : "rectangle" }
+}
+
 @MainActor
 @Observable
 final class IOSEditorModel: Identifiable {
@@ -32,6 +41,7 @@ final class IOSEditorModel: Identifiable {
     var captions = true
     var backsound = false
     var backsoundVolume = 0.35
+    var orientation: ClipOrientation = .portrait
     var videoDuration: Double = 1
     var thumbnails: [EditClip.ID: UIImage] = [:]
 
@@ -156,6 +166,7 @@ final class IOSEditorModel: Identifiable {
         let spans = clips.map { ClipSpan(start: $0.start, end: $0.end, text: $0.text) }
         let response = try await service.mergeClips(
             videoPath: sourceURL.path, clips: spans, segments: segments,
+            vertical: orientation == .portrait,
             subtitles: captions, music: music, progress: progress)
         return URL(fileURLWithPath: response.path)
     }
