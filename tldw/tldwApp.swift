@@ -14,7 +14,7 @@ struct tldwApp: App {
             #if os(macOS)
             ContentView()
             #else
-            IOSRootView()
+            IOSAppShell()
             #endif
         }
     }

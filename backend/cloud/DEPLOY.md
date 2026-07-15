@@ -27,9 +27,15 @@ git push -u origin main            # HF asks for your username + an access token
 ```
 HF builds the image and boots it. First boot downloads model weights (slow).
 
-## 3. Secrets
-In the Space **Settings → Variables and secrets**, add:
-- `TLDW_API_TOKEN` = a long random string (enables bearer auth).
+## 3. Secrets & hardware
+- Leave the Space hardware on **CPU basic (free)** — the default.
+- In **Settings → Variables and secrets**, add:
+  - `TLDW_API_TOKEN` (secret) = a long random string (enables bearer auth).
+- **Light mode is on by default** (baked into the Dockerfile): AI music
+  (MusicGen) + blooper detection are disabled so CPU requests don't time out.
+  The app hides those features automatically (it reads `/health`'s `features`).
+  When you later switch to GPU hardware, add a Variable `TLDW_LIGHT_MODE=0` to
+  turn the Pro features back on — no code change.
 
 ## 4. Point the apps at it
 Set `BackendBaseURL` in **both** app targets' Info.plist to

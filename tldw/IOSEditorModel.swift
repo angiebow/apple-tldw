@@ -38,16 +38,18 @@ final class IOSEditorModel: Identifiable {
     nonisolated let id = UUID()
     var clips: [EditClip]
     var selectedID: EditClip.ID?
-    var captions = true
+    var captions = false     // caption burning disabled for now
     var backsound = false
     var backsoundVolume = 0.35
     var orientation: ClipOrientation = .portrait
+    var features = BackendFeatures()
     var videoDuration: Double = 1
     var thumbnails: [EditClip.ID: UIImage] = [:]
 
     let sourceURL: URL
     let segments: [TranscriptSegment]
     let player: AVPlayer
+    private var sourceTransform: CGAffineTransform = .identity
 
     private let service = HighlightService()
     private var endObserver: Any?
@@ -69,10 +71,35 @@ final class IOSEditorModel: Identifiable {
     // MARK: load (duration + thumbnails)
 
     func load() async {
+        features = await service.capabilities()
         let asset = AVURLAsset(url: sourceURL)
         if let d = try? await asset.load(.duration) { videoDuration = max(1, d.seconds) }
+        sourceTransform = (try? await asset.loadTracks(withMediaType: .video).first?
+            .load(.preferredTransform)) ?? .identity
+        await applyPreviewComposition()
         await generateThumbnails(asset)
         if let clip = selected { seek(to: clip.start) }
+    }
+
+    /// Switch orientation and update the live preview so it shows the same 9:16
+    /// blurred-background framing the export will produce (WYSIWYG).
+    func setOrientation(_ new: ClipOrientation) {
+        guard new != orientation else { return }
+        orientation = new
+        Task { await applyPreviewComposition() }
+    }
+
+    private func applyPreviewComposition() async {
+        guard let item = player.currentItem else { return }
+        if orientation == .portrait {
+            item.videoComposition = LocalVideoExporter.blurredPortraitComposition(
+                for: item.asset, preferred: sourceTransform)
+        } else {
+            item.videoComposition = nil
+        }
+        // Nudge the (possibly paused) player so it redraws the current frame
+        // through the new composition immediately.
+        seek(to: player.currentTime().seconds)
     }
 
     private func generateThumbnails(_ asset: AVURLAsset) async {
@@ -140,6 +167,15 @@ final class IOSEditorModel: Identifiable {
         clips.swapAt(i, i + 1)
     }
 
+    /// Move the clip at `from` to index `to` (interactive drag reorder).
+    func move(from: Int, to: Int) {
+        guard clips.indices.contains(from) else { return }
+        let dest = max(0, min(to, clips.count - 1))
+        guard dest != from else { return }
+        let clip = clips.remove(at: from)
+        clips.insert(clip, at: dest)
+    }
+
     func delete(_ clip: EditClip) {
         clips.removeAll { $0.id == clip.id }
         if selectedID == clip.id { selectedID = clips.first?.id }
@@ -155,20 +191,13 @@ final class IOSEditorModel: Identifiable {
     // MARK: export
 
     func export(progress: @escaping (Double, String?) -> Void) async throws -> URL {
-        var music: [MusicPlacement]? = nil
-        if backsound {
-            progress(0.05, "Composing music…")
-            let mood = clips.map(\.text).joined(separator: " ")
-            let bed = try await service.generateBacksound(text: mood)
-            music = [MusicPlacement(b64: bed.audioB64, start: 0,
-                                    duration: totalDuration, volume: backsoundVolume)]
-        }
-        let spans = clips.map { ClipSpan(start: $0.start, end: $0.end, text: $0.text) }
-        let response = try await service.mergeClips(
-            videoPath: sourceURL.path, clips: spans, segments: segments,
+        // Video assembly runs on-device (AVFoundation) — the cut/merge/caption
+        // step can't be hosted free, so it lives here and costs nothing.
+        let spans = clips.map { LocalVideoExporter.Span(start: $0.start, end: $0.end, text: $0.text) }
+        return try await LocalVideoExporter.merge(
+            source: sourceURL, spans: spans,
             vertical: orientation == .portrait,
-            subtitles: captions, music: music, progress: progress)
-        return URL(fileURLWithPath: response.path)
+            subtitles: captions, progress: progress)
     }
 }
 #endif

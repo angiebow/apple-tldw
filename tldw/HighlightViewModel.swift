@@ -50,6 +50,55 @@ final class HighlightViewModel {
         loadingStage = 0
         defer { isLoading = false }
 
+#if os(iOS)
+        // iOS ships fully self-contained: transcribe on the free HF Whisper API,
+        // rank on-device with the trained Core ML models (no backend to host).
+
+        // ── 1. Extract audio on-device + transcribe on the free HF Whisper API ──
+        statusMessage = "Extracting the audio and transcribing it on Hugging Face. Whisper may take a moment to warm up on the first run."
+        let segments: [TranscriptSegment]
+        do {
+            let result = try await HFTranscriber.transcribe(videoURL: url)
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            serverReachable = true
+            guard !text.isEmpty else {
+                clearResults()
+                transcriptText = ""
+                sourceVideoURL = nil
+                statusMessage = "No speech found in that recording — try another."
+                return
+            }
+            transcriptText = text
+            segments = result.segments
+            transcriptSegments = result.segments   // forwarded to clip export for captions
+            sourceVideoURL = url   // the editor cuts clips from this recording
+        } catch {
+            statusMessage = error.localizedDescription
+            serverReachable = false
+            return
+        }
+
+        // ── 2. Score every scene on-device with the trained Core ML models ──
+        loadingStage = 1
+        statusMessage = "Scoring each moment for relevance and viral potential — all on your device."
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try LocalHighlighter.shared.rank(segments: segments, topK: 10)
+            }.value
+            summary = ""   // no LLM summary on-device
+            relevantLines = result.relevant
+            viralLines = result.viral
+            modelInfo = nil
+            lineCount = result.lineCount
+            loadingStage = 2
+            statusMessage = "Done — ranked \(result.lineCount) moments."
+        } catch {
+            clearResults()
+            statusMessage = error.localizedDescription
+        }
+#else
+        // macOS uses the local backend (the desktop app runs it on the same Mac).
+
         // ── 1. Extract audio + transcribe (backend preprocess + Whisper) ──
         statusMessage = "Pulling the audio out, cleaning it up, and transcribing every word. The first run downloads the Whisper model, so give it a minute."
         let transcript: String
@@ -68,8 +117,8 @@ final class HighlightViewModel {
             transcript = text
             transcriptText = text
             segments = response.segments
-            transcriptSegments = response.segments   // forwarded to clip export for captions
-            sourceVideoURL = url   // the editor cuts clips from this recording
+            transcriptSegments = response.segments
+            sourceVideoURL = url
         } catch {
             statusMessage = error.localizedDescription
             serverReachable = false
@@ -77,7 +126,6 @@ final class HighlightViewModel {
         }
 
         // ── 2. Summarize, embed, and score the transcribed lines ──
-        // Pass segments so each ranked line keeps its start/end span (for clipping).
         loadingStage = 1
         statusMessage = "Summarizing what was said, then scoring every line for relevance and viral potential. The first run downloads the ranking models."
         do {
@@ -98,6 +146,7 @@ final class HighlightViewModel {
             statusMessage = error.localizedDescription
             serverReachable = false
         }
+#endif
     }
 
     /// Clear back to the empty input state (drop-a-recording screen).

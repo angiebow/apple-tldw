@@ -55,4 +55,13 @@ public enum BackendConfig {
     public static var apiToken: String? {
         value(for: "BackendAPIToken")
     }
+
+    /// Hugging Face Inference API token (`HFToken` in BackendConfig.plist or
+    /// Info.plist), used for on-device transcription via the free Whisper endpoint.
+    /// nil when unset. NOTE: a personal token embedded in a shipped app is a soft
+    /// launch shortcut — for wide distribution, proxy transcription so the token
+    /// isn't extractable and per-user quota isn't tied to one account.
+    public static var hfToken: String? {
+        value(for: "HFToken")
+    }
 }

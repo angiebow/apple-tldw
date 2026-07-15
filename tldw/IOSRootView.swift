@@ -16,7 +16,7 @@ import tldwKit
 
 // MARK: - Brand style
 
-private enum Brand {
+enum Brand {
     static let g1 = Color(red: 0.45, green: 0.26, blue: 0.96)   // indigo
     static let g2 = Color(red: 0.93, green: 0.28, blue: 0.55)   // pink
     static let gradient = LinearGradient(colors: [g1, g2],
@@ -29,7 +29,10 @@ private enum Brand {
 
 // MARK: - Root
 
-struct IOSRootView: View {
+struct CreateTab: View {
+    let library: LibraryStore
+    var switchToLibrary: () -> Void = {}
+
     @State private var model = HighlightViewModel()
     @State private var exporter = IOSExporter()
     @State private var pickerItem: PhotosPickerItem?
@@ -53,8 +56,8 @@ struct IOSRootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemBackground))
-            .navigationTitle(model.hasResults ? "Your Shorts" : "")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(model.hasResults ? "Your Shorts" : "Create")
+            .navigationBarTitleDisplayMode(model.hasResults ? .inline : .large)
             .toolbar {
                 if model.hasResults {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -68,11 +71,27 @@ struct IOSRootView: View {
             guard let item else { return }
             Task { await loadAndProcess(item) }
         }
+        .onChange(of: exporter.phase) { _, phase in
+            if phase == .done { recordExports() }
+        }
         .sheet(isPresented: $showingExport) {
             ExportSheet(exporter: exporter)
         }
         .fullScreenCover(item: $editorModel) { editor in
-            IOSEditorView(model: editor)
+            IOSEditorView(model: editor) { url in
+                library.add(url, title: "Merged Short", subtitle: "\(editor.clips.count) clips")
+                switchToLibrary()
+            }
+        }
+    }
+
+    /// Copy the exporter's finished outputs into the session Library.
+    private func recordExports() {
+        if let merged = exporter.mergedURL {
+            library.add(merged, title: "Merged Short", subtitle: "\(selected.count) clips")
+        }
+        for (i, url) in exporter.clipURLs.enumerated() {
+            library.add(url, title: "Clip \(i + 1)", subtitle: "Single Short")
         }
     }
 
@@ -170,6 +189,15 @@ private struct StartView: View {
 
             Spacer()
 
+            VStack(spacing: 14) {
+                step(1, "photo.on.rectangle", "Pick a video", "Any recording from your library.")
+                step(2, "sparkles", "AI finds the highlights", "The best viral & relevant moments.")
+                step(3, "square.and.arrow.up", "Edit & export Shorts", "Trim, caption, merge, and share.")
+            }
+            .padding(.horizontal, 28)
+
+            Spacer()
+
             PhotosPicker(selection: $pickerItem, matching: .videos) {
                 Label("Choose a video", systemImage: "wand.and.stars")
                     .font(.headline)
@@ -186,6 +214,21 @@ private struct StartView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.top, 14)
                 .padding(.bottom, 24)
+        }
+    }
+
+    private func step(_ n: Int, _ icon: String, _ title: String, _ subtitle: String) -> some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle().fill(Brand.g1.opacity(0.12)).frame(width: 42, height: 42)
+                Image(systemName: icon).font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Brand.gradient)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
         }
     }
 }
@@ -435,6 +478,6 @@ struct Movie: Transferable {
 }
 
 #Preview {
-    IOSRootView()
+    IOSAppShell()
 }
 #endif

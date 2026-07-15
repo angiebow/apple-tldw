@@ -15,10 +15,20 @@ import tldwKit
 
 struct IOSEditorView: View {
     @State var model: IOSEditorModel
+    /// Called when a merged Short finishes exporting, so the Library can record it.
+    var onExported: ((URL) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
-    @State private var tool: Tool = .order
+    @State private var tool: Tool = .format
     @State private var isPlaying = false
+
+    // Trim drag anchors (start/end in seconds, captured at gesture begin).
+    @State private var trimDragStart: Double?
+    @State private var trimDragEnd: Double?
+
+    // Timeline reorder drag state.
+    @State private var draggingClipID: EditClip.ID?
+    @State private var dragOffset: CGFloat = 0
 
     // Export overlay state
     @State private var exporting = false
@@ -28,11 +38,10 @@ struct IOSEditorView: View {
     @State private var exportError: String?
 
     private enum Tool: String, CaseIterable, Identifiable {
-        case order = "Order", format = "Format", captions = "Captions", music = "Music", trim = "Trim"
+        case format = "Format", captions = "Captions", music = "Music", trim = "Trim"
         var id: String { rawValue }
         var icon: String {
             switch self {
-            case .order:    return "arrow.left.arrow.right"
             case .format:   return "aspectratio"
             case .captions: return "captions.bubble"
             case .music:    return "music.note"
@@ -85,41 +94,66 @@ struct IOSEditorView: View {
     // MARK: preview
 
     private var preview: some View {
-        ZStack {
-            PlayerLayerView(player: model.player)
-                .aspectRatio(model.orientation.aspect, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .animation(.easeInOut, value: model.orientation)
-            Button {
+        PlayerLayerView(player: model.player)
+            .aspectRatio(model.orientation.aspect, contentMode: .fit)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)   // fill the width edge to edge
+            .animation(.easeInOut, value: model.orientation)
+            .contentShape(Rectangle())
+            .onTapGesture {
                 if isPlaying { model.pause() } else { model.playSelected() }
                 isPlaying.toggle()
-            } label: {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 54))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .shadow(radius: 8)
             }
-        }
-        .padding(.horizontal, 16)
-        .frame(maxHeight: .infinity)
     }
 
     // MARK: timeline
+
+    // Thumb width (46) + HStack spacing (8) — one clip's slot on the timeline.
+    private let timelineItemW: CGFloat = 54
 
     private var timeline: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(Array(model.clips.enumerated()), id: \.element.id) { i, clip in
-                    Button { model.select(clip); isPlaying = false; model.pause() } label: {
-                        thumb(clip, index: i)
-                    }
-                    .buttonStyle(.plain)
+                    thumb(clip, index: i)
+                        .offset(x: draggingClipID == clip.id ? dragOffset : 0)
+                        .scaleEffect(draggingClipID == clip.id ? 1.08 : 1)
+                        .shadow(color: .black.opacity(draggingClipID == clip.id ? 0.4 : 0),
+                                radius: 6, y: 3)
+                        .zIndex(draggingClipID == clip.id ? 1 : 0)
+                        .onTapGesture { model.select(clip); isPlaying = false; model.pause() }
+                        .gesture(reorderGesture(clip))
                 }
             }
             .padding(.horizontal, 16)
+            .animation(.easeInOut(duration: 0.18), value: model.clips.map(\.id))
         }
         .frame(height: 76)
         .padding(.vertical, 8)
+    }
+
+    /// Press-and-hold a clip, then drag it left/right to reorder — the hold lets
+    /// the gesture win over the horizontal scroll. Neighbours shift live.
+    private func reorderGesture(_ clip: EditClip) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.22)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .onChanged { value in
+                guard case .second(true, let drag?) = value else { return }
+                if draggingClipID == nil {
+                    draggingClipID = clip.id
+                    model.select(clip); isPlaying = false; model.pause()
+                }
+                dragOffset = drag.translation.width
+                guard let from = model.clips.firstIndex(where: { $0.id == clip.id }) else { return }
+                let target = from + Int((dragOffset / timelineItemW).rounded())
+                if target != from, model.clips.indices.contains(target) {
+                    model.move(from: from, to: target)
+                    dragOffset -= CGFloat(target - from) * timelineItemW
+                }
+            }
+            .onEnded { _ in
+                withAnimation(.easeInOut(duration: 0.18)) { dragOffset = 0 }
+                draggingClipID = nil
+            }
     }
 
     private func thumb(_ clip: EditClip, index: Int) -> some View {
@@ -142,13 +176,31 @@ struct IOSEditorView: View {
         .overlay(RoundedRectangle(cornerRadius: 6)
             .strokeBorder(isSel ? AnyShapeStyle(g) : AnyShapeStyle(Color.white.opacity(0.15)),
                           lineWidth: isSel ? 2 : 1))
+        // Delete affordance on the selected clip (Order tab is gone).
+        .overlay(alignment: .topTrailing) {
+            if isSel && model.clips.count > 1 {
+                Button { model.delete(clip) } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white, .black.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .offset(x: 6, y: -6)
+            }
+        }
     }
 
     // MARK: tool tabs
 
+    /// Tools available. Music (AI backsound) and Captions (burned subtitles) are
+    /// disabled for now — hide those tabs.
+    private var availableTools: [Tool] {
+        Tool.allCases.filter { $0 != .music && $0 != .captions }
+    }
+
     private var toolTabs: some View {
         HStack(spacing: 0) {
-            ForEach(Tool.allCases) { t in
+            ForEach(availableTools) { t in
                 Button { tool = t } label: {
                     VStack(spacing: 4) {
                         Image(systemName: t.icon).font(.body)
@@ -169,7 +221,6 @@ struct IOSEditorView: View {
     private var toolPanel: some View {
         VStack(spacing: 14) {
             switch tool {
-            case .order:    orderPanel
             case .format:   formatPanel
             case .captions: togglePanel(
                 title: "Burn captions", subtitle: "Karaoke subtitles on the Short",
@@ -182,29 +233,11 @@ struct IOSEditorView: View {
         .animation(.default, value: tool)
     }
 
-    private var orderPanel: some View {
-        VStack(spacing: 10) {
-            if let clip = model.selected {
-                Text(clip.text).font(.footnote).foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 12) {
-                    roundButton("arrow.left", "Move left") { model.moveLeft(clip) }
-                    roundButton("arrow.right", "Move right") { model.moveRight(clip) }
-                    Spacer()
-                    roundButton("trash", "Remove", tint: .red) { model.delete(clip) }
-                }
-            } else {
-                Text("No clips left — go back and pick some Shorts.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private var formatPanel: some View {
         HStack(spacing: 16) {
             ForEach(ClipOrientation.allCases) { o in
                 let isSel = model.orientation == o
-                Button { model.orientation = o } label: {
+                Button { model.setOrientation(o) } label: {
                     VStack(spacing: 8) {
                         RoundedRectangle(cornerRadius: 5)
                             .strokeBorder(isSel ? AnyShapeStyle(g) : AnyShapeStyle(Color.white.opacity(0.35)),
@@ -250,41 +283,117 @@ struct IOSEditorView: View {
         }
     }
 
+    @ViewBuilder
     private var trimPanel: some View {
-        VStack(spacing: 10) {
-            if let clip = model.selected {
-                trimRow("Start", value: clip.start, range: 0...max(0.1, clip.end - 0.1)) { s in
+        if let clip = model.selected {
+            VStack(spacing: 10) {
+                filmstripTrimmer(for: clip)
+                    .frame(height: 64)
+                HStack {
+                    Text(timecode(clip.start))
+                    Spacer()
+                    Text(String(format: "%.1fs", clip.duration)).foregroundStyle(.white.opacity(0.85))
+                    Spacer()
+                    Text(timecode(clip.end))
+                }
+                .font(.caption2.monospaced())
+                .foregroundStyle(.white.opacity(0.6))
+            }
+        } else {
+            Text("No clip selected.").font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// A macOS-style filmstrip clip: a repeated-thumbnail band whose lit region is
+    /// the kept span. Drag the left/right handles to trim start/end; the window
+    /// gives a little room on each side so the clip can also be extended.
+    private func filmstripTrimmer(for clip: EditClip) -> some View {
+        // Window shown in the strip: the clip plus padding, clamped to the video.
+        let pad = max(1.0, clip.duration * 0.5)
+        let lo = max(0, clip.start - pad)
+        let hi = min(model.videoDuration, clip.end + pad)
+        let span = max(0.1, hi - lo)
+
+        return GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            // Reserve a margin on both sides so the handles are always fully
+            // visible (never clipped at the panel edge, even for a clip at the
+            // very start/end of the video).
+            let inset: CGFloat = 24
+            let innerW = max(1, w - inset * 2)
+            let pps = innerW / span                              // pixels per second
+            let startX = inset + CGFloat(clip.start - lo) * pps
+            let endX = inset + CGFloat(clip.end - lo) * pps
+
+            ZStack(alignment: .topLeading) {
+                filmstripBand(width: w)                          // thumbnails fill the strip
+
+                // Dim the trimmed-away edges.
+                Color.black.opacity(0.55).frame(width: startX, height: h)
+                Color.black.opacity(0.55).frame(width: max(0, w - endX), height: h)
+                    .offset(x: endX)
+
+                // Kept-span frame.
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(g, lineWidth: 3)
+                    .frame(width: max(1, endX - startX), height: h)
+                    .offset(x: startX)
+
+                trimHandle(center: startX, height: h) { dx in
+                    if trimDragStart == nil { trimDragStart = clip.start }
+                    let s = min(max(lo, (trimDragStart ?? clip.start) + Double(dx / pps)), clip.end - 0.2)
                     model.setTrim(start: s, end: clip.end)
-                }
-                trimRow("End", value: clip.end, range: min(clip.start + 0.1, model.videoDuration)...model.videoDuration) { e in
+                } onEnd: { trimDragStart = nil }
+
+                trimHandle(center: endX, height: h) { dx in
+                    if trimDragEnd == nil { trimDragEnd = clip.end }
+                    let e = max(min(hi, (trimDragEnd ?? clip.end) + Double(dx / pps)), clip.start + 0.2)
                     model.setTrim(start: clip.start, end: e)
+                } onEnd: { trimDragEnd = nil }
+            }
+            .frame(width: w, height: h)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func filmstripBand(width: CGFloat) -> some View {
+        let tile: CGFloat = 46
+        let count = max(1, Int((width / tile).rounded(.up)))
+        return HStack(spacing: 0) {
+            ForEach(0..<count, id: \.self) { _ in
+                Group {
+                    if let img = model.thumbnails[model.selectedID ?? UUID()] {
+                        Image(uiImage: img).resizable().scaledToFill()
+                    } else {
+                        Rectangle().fill(.white.opacity(0.08))
+                    }
                 }
-                Text(String(format: "Length %.1fs", clip.duration))
-                    .font(.caption).foregroundStyle(.white.opacity(0.6))
+                .frame(width: tile, height: 64)
+                .clipped()
             }
         }
     }
 
-    private func trimRow(_ label: String, value: Double, range: ClosedRange<Double>,
-                         onChange: @escaping (Double) -> Void) -> some View {
-        HStack(spacing: 10) {
-            Text(label).font(.caption).foregroundStyle(.white.opacity(0.7)).frame(width: 40, alignment: .leading)
-            Slider(value: Binding(get: { value }, set: onChange), in: range)
-                .tint(Color(red: 0.55, green: 0.30, blue: 0.96))
-            Text(timecode(value)).font(.caption2.monospaced()).foregroundStyle(.white.opacity(0.7))
-                .frame(width: 48, alignment: .trailing)
-        }
-    }
-
-    private func roundButton(_ icon: String, _ label: String, tint: Color = .white,
-                             action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(label, systemImage: icon)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(tint)
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(.white.opacity(0.08), in: Capsule())
-        }
+    /// A grab handle centered horizontally at `center`, with a wide invisible hit
+    /// area so it's easy to drag with a fingertip.
+    private func trimHandle(center: CGFloat, height: CGFloat,
+                            onDrag: @escaping (CGFloat) -> Void,
+                            onEnd: @escaping () -> Void) -> some View {
+        let hit: CGFloat = 40
+        return RoundedRectangle(cornerRadius: 6)
+            .fill(g)
+            .frame(width: 16, height: height)
+            .overlay(RoundedRectangle(cornerRadius: 1.5).fill(.white)
+                .frame(width: 2.5, height: 20))
+            .frame(width: hit, height: height)        // wide touch target
+            .contentShape(Rectangle())
+            .offset(x: center - hit / 2)
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { onDrag($0.translation.width) }
+                    .onEnded { _ in onEnd() }
+            )
     }
 
     // MARK: bottom action bar
@@ -349,6 +458,7 @@ struct IOSEditorView: View {
                 }
             }
             exportedURL = url
+            onExported?(url)
         } catch {
             exportError = error.localizedDescription
         }

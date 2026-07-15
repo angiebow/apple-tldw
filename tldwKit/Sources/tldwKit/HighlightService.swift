@@ -24,6 +24,17 @@ public enum HighlightError: LocalizedError {
     }
 }
 
+/// Which optional (GPU-heavy) backend features are available. Defaults to on so
+/// a full/GPU backend needs no special casing.
+public struct BackendFeatures: Sendable, Equatable {
+    public var music: Bool
+    public var bloopers: Bool
+    public init(music: Bool = true, bloopers: Bool = true) {
+        self.music = music
+        self.bloopers = bloopers
+    }
+}
+
 public struct HighlightService {
     public var baseURL: URL
     public var apiToken: String?
@@ -45,6 +56,22 @@ public struct HighlightService {
             return false
         }
         return http.statusCode == 200
+    }
+
+    /// The backend's advertised feature set (from /health). On the free/light
+    /// tier `music` and `bloopers` come back false so the app can hide that UI.
+    /// Falls back to all-on if the backend is old or unreachable.
+    public func capabilities() async -> BackendFeatures {
+        var request = URLRequest(url: baseURL.appendingPathComponent("health"))
+        request.timeoutInterval = 3
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let features = json["features"] as? [String: Any] else {
+            return BackendFeatures()
+        }
+        func on(_ key: String) -> Bool { (features[key] as? Bool) ?? true }
+        return BackendFeatures(music: on("music"), bloopers: on("bloopers"))
     }
 
     // MARK: - Synchronous, text-only

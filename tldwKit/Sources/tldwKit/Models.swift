@@ -44,6 +44,18 @@ public struct LineScore: Codable, Identifiable {
 
     public var id: Int { index }
 
+    public init(index: Int, text: String, relevance: Double, viralScore: Double,
+                viralProb: Double, viralLabel: Bool, start: Double? = nil, end: Double? = nil) {
+        self.index = index
+        self.text = text
+        self.relevance = relevance
+        self.viralScore = viralScore
+        self.viralProb = viralProb
+        self.viralLabel = viralLabel
+        self.start = start
+        self.end = end
+    }
+
     enum CodingKeys: String, CodingKey {
         case index, text, relevance, start, end
         case viralScore = "viral_score"
@@ -166,6 +178,14 @@ public struct TranscriptSegment: Codable, Identifiable {
     public let text: String
     /// Per-word timings (present when the backend has word timestamps on).
     public let words: [TranscriptWord]?
+
+    public init(id: Int, start: Double, end: Double, text: String, words: [TranscriptWord]? = nil) {
+        self.id = id
+        self.start = start
+        self.end = end
+        self.text = text
+        self.words = words
+    }
 }
 
 /// Response body for `POST /transcribe`.

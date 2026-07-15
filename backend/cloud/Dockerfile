@@ -18,7 +18,10 @@ ENV HOME=/home/user \
     HF_HOME=/home/user/.cache/huggingface \
     PYTHONUNBUFFERED=1 \
     TLDW_STORAGE_BACKEND=local \
-    TLDW_CLOUD_DATA=/home/user/app/.data
+    TLDW_CLOUD_DATA=/home/user/app/.data \
+    # Free CPU tier: disable GPU-heavy AI music + blooper detection so requests
+    # don't time out. Override with a Space Variable TLDW_LIGHT_MODE=0 on GPU.
+    TLDW_LIGHT_MODE=1
 
 WORKDIR /home/user/app
 

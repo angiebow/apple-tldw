@@ -93,8 +93,13 @@ def require_auth(authorization: Optional[str] = Header(None)) -> None:
 
 
 @app.get("/health")
-def health() -> Dict[str, str]:
-    return {"status": "ok", "storage": config.STORAGE_BACKEND}
+def health() -> Dict[str, Any]:
+    return {
+        "status": "ok",
+        "storage": config.STORAGE_BACKEND,
+        "light_mode": config.LIGHT_MODE,
+        "features": config.FEATURES,
+    }
 
 
 @app.post("/uploads", response_model=UploadResponse)
@@ -109,6 +114,9 @@ def create_job(req: JobCreate, _: None = Depends(require_auth)) -> JobView:
     if req.type not in JOB_TYPES:
         raise HTTPException(status_code=400,
                             detail=f"Unknown job type {req.type!r}; expected one of {JOB_TYPES}.")
+    if req.type in config.DISABLED_JOB_TYPES:
+        raise HTTPException(status_code=503,
+                            detail=f"'{req.type}' is disabled on this tier (needs GPU hosting).")
     if not app.state.storage.exists(req.media_key):
         raise HTTPException(status_code=400,
                             detail=f"media_key not found in storage: {req.media_key} "
@@ -154,6 +162,9 @@ def highlight(payload: Dict[str, Any] = Body(...), _: None = Depends(require_aut
 
 @app.post("/backsound")
 def backsound(payload: Dict[str, Any] = Body(...), _: None = Depends(require_auth)) -> Dict[str, Any]:
+    if not config.FEATURES["music"]:
+        raise HTTPException(status_code=503,
+                            detail="AI music is disabled on this tier (needs GPU hosting).")
     from .sync_handlers import run_backsound
     return run_backsound(payload)
 

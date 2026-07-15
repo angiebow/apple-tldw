@@ -34,3 +34,23 @@ MAX_UPLOAD_BYTES = int(os.environ.get("TLDW_MAX_UPLOAD_BYTES", str(2 * 1024 ** 3
 # When set, every request must carry `Authorization: Bearer <token>`. Unset in
 # dev so curl works without a token; set in prod (per-user tokens live in a DB).
 API_TOKEN = os.environ.get("TLDW_API_TOKEN", "")
+
+# Light/free tier: turn off the GPU-heavy features that time out on CPU-only
+# hosting (free Hugging Face CPU Space). This disables AI music generation
+# (MusicGen /backsound) and blooper detection; transcribe / highlight / clip /
+# merge all stay on. Set TLDW_LIGHT_MODE=1 on the free Space; unset it once you
+# move to GPU hardware to light the Pro features back up.
+LIGHT_MODE = os.environ.get("TLDW_LIGHT_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+
+# Job types refused in light mode (heavy ML on CPU).
+DISABLED_JOB_TYPES = ("bloopers",) if LIGHT_MODE else ()
+
+# Feature capabilities advertised at /health so the app can hide Pro-only UI.
+FEATURES = {
+    "transcribe": True,
+    "highlight": True,
+    "clip": True,
+    "merge": True,
+    "music": not LIGHT_MODE,
+    "bloopers": not LIGHT_MODE,
+}

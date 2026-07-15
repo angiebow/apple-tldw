@@ -27,8 +27,6 @@ final class IOSExporter {
     var mergedURL: URL?
     var clipURLs: [URL] = []
 
-    private let service = HighlightService()
-
     var shareItems: [URL] {
         if let mergedURL { return [mergedURL] }
         return clipURLs
@@ -54,9 +52,9 @@ final class IOSExporter {
     private func run(source: URL, lines: [LineScore],
                      segments: [TranscriptSegment], merge: Bool) async {
         // Only timestamped Shorts can be cut (start/end come from /transcribe).
-        let spans = lines.compactMap { line -> ClipSpan? in
+        let spans = lines.compactMap { line -> LocalVideoExporter.Span? in
             guard let s = line.start, let e = line.end, e > s else { return nil }
-            return ClipSpan(start: s, end: e, text: line.text)
+            return LocalVideoExporter.Span(start: s, end: e, text: line.text)
         }
         guard !spans.isEmpty else {
             phase = .failed
@@ -71,7 +69,7 @@ final class IOSExporter {
         clipURLs = []
         statusText = merge ? "Merging into one Short…" : "Exporting \(spans.count) clip(s)…"
 
-        // Job progress arrives off the main actor; hop back to update UI state.
+        // Video assembly runs on-device (AVFoundation) — no backend round-trip.
         let onProgress: (Double, String?) -> Void = { fraction, stage in
             Task { @MainActor in
                 self.progress = fraction
@@ -81,13 +79,13 @@ final class IOSExporter {
 
         do {
             if merge {
-                let response = try await service.mergeClips(
-                    videoPath: source.path, clips: spans, segments: segments, progress: onProgress)
-                mergedURL = URL(fileURLWithPath: response.path)
+                mergedURL = try await LocalVideoExporter.merge(
+                    source: source, spans: spans, vertical: true,
+                    subtitles: false, progress: onProgress)
             } else {
-                let response = try await service.exportClips(
-                    videoPath: source.path, clips: spans, segments: segments, progress: onProgress)
-                clipURLs = response.clips.map { URL(fileURLWithPath: $0.path) }
+                clipURLs = try await LocalVideoExporter.clips(
+                    source: source, spans: spans, vertical: true,
+                    subtitles: false, progress: onProgress)
             }
             statusText = "Ready to share"
             phase = .done
